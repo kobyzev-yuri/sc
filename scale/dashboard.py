@@ -134,11 +134,27 @@ def render_dashboard():
     with st.sidebar:
         st.header("📁 Загрузка данных")
 
-        uploaded_files = st.file_uploader(
-            "Загрузите JSON файлы с предсказаниями",
-            type=["json"],
-            accept_multiple_files=True,
+        # Опция загрузки из директории
+        use_default_data = st.checkbox(
+            "Использовать данные из results/predictions", value=False
         )
+
+        if use_default_data:
+            predictions_dir = Path("results/predictions")
+            if predictions_dir.exists():
+                json_files = list(predictions_dir.glob("*.json"))
+                st.info(f"Найдено {len(json_files)} файлов в results/predictions")
+            else:
+                st.warning("Директория results/predictions не найдена")
+                use_default_data = False
+
+        uploaded_files = None
+        if not use_default_data:
+            uploaded_files = st.file_uploader(
+                "Загрузите JSON файлы с предсказаниями",
+                type=["json"],
+                accept_multiple_files=True,
+            )
 
         st.markdown("---")
 
@@ -178,15 +194,31 @@ def render_dashboard():
                 st.warning("Нет данных для сохранения")
 
     # Основная область
-    if uploaded_files:
-        # Загрузка предсказаний
+    predictions = None
+
+    # Загрузка данных
+    if use_default_data:
+        predictions_dir = Path("results/predictions")
+        if predictions_dir.exists():
+            json_files = list(predictions_dir.glob("*.json"))
+            if json_files:
+                with st.spinner("Загрузка предсказаний из results/predictions..."):
+                    predictions = {}
+                    for json_file in json_files:
+                        try:
+                            preds = domain.predictions_from_json(str(json_file))
+                            image_name = json_file.stem
+                            predictions[image_name] = preds
+                        except Exception as e:
+                            st.error(f"Ошибка при загрузке {json_file.name}: {e}")
+
+    elif uploaded_files:
+        # Загрузка предсказаний из загруженных файлов
         with st.spinner("Загрузка предсказаний..."):
             predictions = load_predictions_from_upload(uploaded_files)
 
-        if not predictions:
-            st.error("Не удалось загрузить предсказания")
-            return
-
+    # Обработка данных
+    if predictions and len(predictions) > 0:
         st.success(f"Загружено {len(predictions)} файлов")
 
         # Агрегация данных

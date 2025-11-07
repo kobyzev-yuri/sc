@@ -3,15 +3,17 @@ models/*.pt
 models/*.pkl
 
 # Данные
-*.json
 *.tiff
 *.tif
 *.png
 *.jpg
 *.jpeg
 wsi/
-results/
+results/visualization/
 experiments/
+
+# Тестовые данные (исключение для results/predictions)
+!results/predictions/*.json
 
 # Python
 __pycache__/
