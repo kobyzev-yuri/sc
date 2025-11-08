@@ -1,0 +1,60 @@
+{
+  "experiments": [
+    {
+      "name": "pca_simple",
+      "method": "pca_scoring",
+      "description": "Простая PCA нормализация (min-max на PC1)",
+      "enabled": true
+    },
+    {
+      "name": "spectral_p1_p99",
+      "method": "spectral_analysis",
+      "description": "Спектральный анализ с процентилями [1, 99]",
+      "percentile_low": 1.0,
+      "percentile_high": 99.0,
+      "use_gmm": false,
+      "enabled": true
+    },
+    {
+      "name": "spectral_p05_p995",
+      "method": "spectral_analysis",
+      "description": "Спектральный анализ с процентилями [0.5, 99.5]",
+      "percentile_low": 0.5,
+      "percentile_high": 99.5,
+      "use_gmm": false,
+      "enabled": true
+    },
+    {
+      "name": "spectral_p5_p95",
+      "method": "spectral_analysis",
+      "description": "Спектральный анализ с процентилями [5, 95]",
+      "percentile_low": 5.0,
+      "percentile_high": 95.0,
+      "use_gmm": false,
+      "enabled": true
+    },
+    {
+      "name": "spectral_gmm",
+      "method": "spectral_analysis",
+      "description": "Спектральный анализ с GMM",
+      "percentile_low": 1.0,
+      "percentile_high": 99.0,
+      "use_gmm": true,
+      "enabled": true
+    }
+  ],
+  "data_preprocessing": {
+    "use_relative_features": true,
+    "select_feature_columns": true,
+    "fillna_value": 0
+  },
+  "output": {
+    "base_dir": "experiments",
+    "experiment_name": "scale_comparison",
+    "save_models": true,
+    "save_individual_results": true,
+    "create_visualizations": true
+  }
+}
+
+

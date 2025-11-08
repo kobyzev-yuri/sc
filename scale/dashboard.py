@@ -33,7 +33,7 @@ except ImportError as e:
         f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
     ) from e
 
-from scale import aggregate, spectral_analysis, domain
+from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -177,6 +177,57 @@ def render_dashboard():
         )
 
         st.markdown("---")
+        st.header("🔬 Сравнение методов")
+        
+        enable_comparison = st.checkbox(
+            "Включить сравнение методов", value=False
+        )
+        
+        # Инициализация переменных для сравнения
+        use_pca_simple = False
+        use_spectral_p1_p99 = False
+        use_spectral_p05_p995 = False
+        use_spectral_p5_p95 = False
+        use_spectral_gmm = False
+        use_custom_spectral = False
+        custom_percentile_low = 2.0
+        custom_percentile_high = 98.0
+        
+        if enable_comparison:
+            st.subheader("Выберите методы для сравнения:")
+            
+            use_pca_simple = st.checkbox("PCA Scoring (простая нормализация)", value=True)
+            
+            use_spectral_p1_p99 = st.checkbox(
+                "Spectral Analysis [1, 99]", value=True
+            )
+            
+            use_spectral_p05_p995 = st.checkbox(
+                "Spectral Analysis [0.5, 99.5]", value=False
+            )
+            
+            use_spectral_p5_p95 = st.checkbox(
+                "Spectral Analysis [5, 95]", value=False
+            )
+            
+            use_spectral_gmm = st.checkbox(
+                "Spectral Analysis + GMM", value=False
+            )
+            
+            # Настройки для кастомного spectral analysis
+            st.subheader("Кастомный Spectral Analysis:")
+            custom_percentile_low = st.slider(
+                "Нижний процентиль (кастомный)", 0.0, 10.0, 2.0, 0.1, key="custom_low"
+            )
+            custom_percentile_high = st.slider(
+                "Верхний процентиль (кастомный)", 90.0, 100.0, 98.0, 0.1, key="custom_high"
+            )
+            use_custom_spectral = st.checkbox(
+                f"Spectral Analysis [{custom_percentile_low}, {custom_percentile_high}]", 
+                value=False
+            )
+
+        st.markdown("---")
 
         st.header("💾 Эксперименты")
 
@@ -189,6 +240,16 @@ def render_dashboard():
                     st.session_state.get("analyzer"),
                     {"settings": st.session_state.get("settings", {})},
                 )
+                
+                # Сохранение результатов сравнения, если они есть
+                if "comparison" in st.session_state:
+                    try:
+                        comparison = st.session_state.comparison
+                        comparison.save_results(exp_dir / "comparison")
+                        st.success(f"Результаты сравнения сохранены в: {exp_dir / 'comparison'}")
+                    except Exception as e:
+                        st.warning(f"Не удалось сохранить результаты сравнения: {e}")
+                
                 st.success(f"Эксперимент сохранен: {exp_dir}")
             else:
                 st.warning("Нет данных для сохранения")
@@ -248,9 +309,13 @@ def render_dashboard():
         }
 
         # Вкладки для визуализации
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📊 Данные", "📈 Распределения", "🔬 Спектральный анализ", "📋 Статистика"]
-        )
+        tab_names = ["📊 Данные", "📈 Распределения", "🔬 Спектральный анализ", "📋 Статистика"]
+        if enable_comparison:
+            tab_names.append("⚖️ Сравнение методов")
+        
+        tabs = st.tabs(tab_names)
+        tab1, tab2, tab3, tab4 = tabs[0], tabs[1], tabs[2], tabs[3]
+        tab_comparison = tabs[4] if enable_comparison else None
 
         with tab1:
             st.header("Загруженные данные")
@@ -430,6 +495,170 @@ def render_dashboard():
                         ax.set_yticklabels(corr_matrix.columns)
                         plt.colorbar(im, ax=ax)
                         st.pyplot(fig)
+
+        # Вкладка сравнения методов
+        if tab_comparison is not None and enable_comparison:
+            with tab_comparison:
+                st.header("⚖️ Сравнение методов построения шкалы")
+                
+                # Проверка, какие методы выбраны
+                selected_methods = []
+                if use_pca_simple:
+                    selected_methods.append(("pca_simple", "PCA Scoring"))
+                if use_spectral_p1_p99:
+                    selected_methods.append(("spectral_p1_p99", "Spectral [1, 99]"))
+                if use_spectral_p05_p995:
+                    selected_methods.append(("spectral_p05_p995", "Spectral [0.5, 99.5]"))
+                if use_spectral_p5_p95:
+                    selected_methods.append(("spectral_p5_p95", "Spectral [5, 95]"))
+                if use_spectral_gmm:
+                    selected_methods.append(("spectral_gmm", "Spectral + GMM"))
+                if use_custom_spectral:
+                    selected_methods.append((
+                        f"spectral_custom_{custom_percentile_low}_{custom_percentile_high}",
+                        f"Spectral [{custom_percentile_low}, {custom_percentile_high}]"
+                    ))
+                
+                if not selected_methods:
+                    st.warning("Выберите хотя бы один метод для сравнения в боковой панели")
+                else:
+                    st.info(f"Сравнивается {len(selected_methods)} методов")
+                    
+                    # Инициализация сравнения
+                    comparison = scale_comparison.ScaleComparison()
+                    
+                    # Запуск выбранных методов
+                    with st.spinner("Запуск методов..."):
+                        progress_bar = st.progress(0)
+                        total_methods = len(selected_methods)
+                        
+                        for idx, (method_key, method_name) in enumerate(selected_methods):
+                            try:
+                                if method_key == "pca_simple":
+                                    comparison.test_pca_scoring(df_features, name=method_key)
+                                
+                                elif method_key == "spectral_p1_p99":
+                                    comparison.test_spectral_analysis(
+                                        df_features,
+                                        name=method_key,
+                                        percentile_low=1.0,
+                                        percentile_high=99.0,
+                                        use_gmm=False
+                                    )
+                                
+                                elif method_key == "spectral_p05_p995":
+                                    comparison.test_spectral_analysis(
+                                        df_features,
+                                        name=method_key,
+                                        percentile_low=0.5,
+                                        percentile_high=99.5,
+                                        use_gmm=False
+                                    )
+                                
+                                elif method_key == "spectral_p5_p95":
+                                    comparison.test_spectral_analysis(
+                                        df_features,
+                                        name=method_key,
+                                        percentile_low=5.0,
+                                        percentile_high=95.0,
+                                        use_gmm=False
+                                    )
+                                
+                                elif method_key == "spectral_gmm":
+                                    comparison.test_spectral_analysis(
+                                        df_features,
+                                        name=method_key,
+                                        percentile_low=1.0,
+                                        percentile_high=99.0,
+                                        use_gmm=True
+                                    )
+                                
+                                elif method_key.startswith("spectral_custom_"):
+                                    comparison.test_spectral_analysis(
+                                        df_features,
+                                        name=method_key,
+                                        percentile_low=custom_percentile_low,
+                                        percentile_high=custom_percentile_high,
+                                        use_gmm=False
+                                    )
+                                
+                                progress_bar.progress((idx + 1) / total_methods)
+                                
+                            except Exception as e:
+                                st.error(f"Ошибка при выполнении {method_name}: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                    
+                    progress_bar.empty()
+                    
+                    # Сравнение результатов
+                    try:
+                        comparison_df = comparison.compare_results()
+                        stats_df = comparison.get_statistics()
+                        
+                        # Отображение статистики
+                        st.subheader("📊 Статистика по методам")
+                        st.dataframe(stats_df, use_container_width=True)
+                        
+                        # Таблица сравнения
+                        st.subheader("📋 Сравнение шкал для каждого образца")
+                        st.dataframe(comparison_df, use_container_width=True)
+                        
+                        # Визуализация
+                        st.subheader("📈 Визуализация сравнения")
+                        
+                        # Создание временного файла для графика
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                            tmp_path = Path(tmp_file.name)
+                        
+                        try:
+                            comparison.visualize_comparison(save_path=tmp_path)
+                            if tmp_path.exists():
+                                st.image(str(tmp_path))
+                                # Скачивание графика
+                                with open(tmp_path, "rb") as f:
+                                    st.download_button(
+                                        label="📥 Скачать график сравнения",
+                                        data=f.read(),
+                                        file_name=f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                        mime="image/png"
+                                    )
+                        finally:
+                            if tmp_path.exists():
+                                tmp_path.unlink()
+                        
+                        # Скачивание результатов
+                        st.subheader("💾 Скачивание результатов")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            csv_comparison = comparison_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Скачать сравнение (CSV)",
+                                data=csv_comparison,
+                                file_name=f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv"
+                            )
+                        
+                        with col2:
+                            csv_stats = stats_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Скачать статистику (CSV)",
+                                data=csv_stats,
+                                file_name=f"statistics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv"
+                            )
+                        
+                        # Сохранение в session state для возможности сохранения эксперимента
+                        st.session_state.comparison = comparison
+                        st.session_state.comparison_df = comparison_df
+                        st.session_state.stats_df = stats_df
+                        
+                    except Exception as e:
+                        st.error(f"Ошибка при сравнении результатов: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
     else:
         st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")
