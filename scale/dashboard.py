@@ -33,7 +33,7 @@ except ImportError as e:
         f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
     ) from e
 
-from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring
+from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -356,13 +356,13 @@ def render_dashboard():
         }
 
         # Вкладки для визуализации
-        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика"]
+        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация"]
         if enable_comparison:
             tab_names.append("⚖️ Сравнение методов")
         
         tabs = st.tabs(tab_names)
-        tab1, tab_features, tab2, tab3, tab4, tab5 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5]
-        tab_comparison = tabs[6] if enable_comparison else None
+        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
+        tab_comparison = tabs[7] if enable_comparison else None
 
         with tab1:
             st.header("Загруженные данные")
@@ -1365,16 +1365,53 @@ def render_dashboard():
                     # Корреляционная матрица
                     if len(numeric_cols) > 1:
                         st.subheader("Корреляционная матрица")
-                        corr_matrix = df_features[numeric_cols].corr()
-
-                        fig, ax = plt.subplots(figsize=(12, 10))
-                        im = ax.imshow(corr_matrix, cmap="coolwarm", aspect="auto")
-                        ax.set_xticks(range(len(corr_matrix.columns)))
-                        ax.set_yticks(range(len(corr_matrix.columns)))
-                        ax.set_xticklabels(corr_matrix.columns, rotation=45, ha="right")
-                        ax.set_yticklabels(corr_matrix.columns)
-                        plt.colorbar(im, ax=ax)
-                        st.pyplot(fig)
+                        
+                        # Используем функцию из preprocessing
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                            tmp_path = Path(tmp_file.name)
+                        
+                        try:
+                            preprocessing.visualize_correlations(
+                                df_features,
+                                feature_columns=numeric_cols,
+                                save_path=tmp_path
+                            )
+                            if tmp_path.exists():
+                                st.image(str(tmp_path))
+                        finally:
+                            if tmp_path.exists():
+                                tmp_path.unlink()
+                        
+                        # Анализ высоко коррелированных признаков
+                        with st.expander("🔍 Анализ высоко коррелированных признаков"):
+                            threshold = st.slider("Порог корреляции", 0.7, 0.99, 0.95, 0.01)
+                            highly_corr = preprocessing.find_highly_correlated_features(
+                                df_features,
+                                threshold=threshold,
+                                feature_columns=numeric_cols
+                            )
+                            
+                            if highly_corr:
+                                st.warning(f"Найдено {len(highly_corr)} пар признаков с корреляцией >= {threshold}")
+                                corr_df = pd.DataFrame(
+                                    highly_corr,
+                                    columns=["Признак 1", "Признак 2", "Корреляция"]
+                                )
+                                st.dataframe(corr_df, use_container_width=True)
+                                
+                                if st.button("Удалить избыточные признаки"):
+                                    df_cleaned, removed = preprocessing.remove_redundant_features(
+                                        df_features,
+                                        threshold=threshold,
+                                        feature_columns=numeric_cols
+                                    )
+                                    if removed:
+                                        st.success(f"Удалено {len(removed)} признаков: {', '.join(removed)}")
+                                        st.session_state.df_results = df_cleaned
+                                        st.rerun()
+                            else:
+                                st.info("Нет высоко коррелированных признаков")
 
         # Вкладка сравнения методов
         if tab_comparison is not None and enable_comparison:
@@ -1539,6 +1576,181 @@ def render_dashboard():
                         st.error(f"Ошибка при сравнении результатов: {e}")
                         import traceback
                         st.code(traceback.format_exc())
+
+        # Вкладка кластеризации
+        with tab_clustering:
+            st.header("🔗 Кластеризация данных")
+            st.markdown("Выявление скрытых паттернов и патологических фенотипов через кластеризацию.")
+            
+            if len(df_features) > 0:
+                # Настройки кластеризации
+                st.subheader("⚙️ Настройки кластеризации")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    clustering_method = st.selectbox(
+                        "Метод кластеризации",
+                        ["hdbscan", "agglomerative", "kmeans"],
+                        help="HDBSCAN: автоматическое определение числа кластеров. Agglomerative/KMeans: требуется указать число кластеров."
+                    )
+                
+                with col2:
+                    if clustering_method == "hdbscan":
+                        min_cluster_size = st.slider("Минимальный размер кластера", 2, 10, 2)
+                        use_pca = st.checkbox("Использовать PCA", value=True)
+                        n_clusters = None
+                    elif clustering_method == "agglomerative":
+                        n_clusters = st.slider("Число кластеров", 2, 10, 3)
+                        use_pca = st.checkbox("Использовать PCA", value=True)
+                        min_cluster_size = None
+                    else:  # kmeans
+                        n_clusters = st.slider("Число кластеров", 2, 10, 3)
+                        use_pca = st.checkbox("Использовать PCA", value=True)
+                        min_cluster_size = None
+                
+                with col3:
+                    if use_pca:
+                        pca_components = st.slider("Число компонент PCA", 2, 20, 10)
+                    else:
+                        pca_components = None
+                
+                # Запуск кластеризации
+                if st.button("🚀 Запустить кластеризацию", type="primary"):
+                    with st.spinner("Выполняется кластеризация..."):
+                        try:
+                            clusterer = clustering.ClusterAnalyzer(
+                                method=clustering_method,
+                                n_clusters=n_clusters,
+                                random_state=42,
+                            )
+                            
+                            clusterer.fit(
+                                df_features,
+                                use_pca=use_pca,
+                                pca_components=pca_components if use_pca else None,
+                                min_cluster_size=min_cluster_size if clustering_method == "hdbscan" else 2,
+                            )
+                            
+                            # Сохраняем в session state
+                            st.session_state.clusterer = clusterer
+                            
+                            st.success("✅ Кластеризация завершена!")
+                            
+                        except Exception as e:
+                            st.error(f"Ошибка при кластеризации: {e}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                
+                # Отображение результатов
+                if "clusterer" in st.session_state:
+                    clusterer = st.session_state.clusterer
+                    
+                    # Метрики
+                    st.subheader("📊 Метрики качества кластеризации")
+                    metrics = clusterer.get_metrics(df_features)
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Число кластеров", metrics["n_clusters"])
+                    with col2:
+                        st.metric("Шум (outliers)", metrics["n_noise"])
+                    with col3:
+                        if not np.isnan(metrics.get("silhouette_score", np.nan)):
+                            st.metric("Silhouette Score", f"{metrics['silhouette_score']:.3f}")
+                        else:
+                            st.metric("Silhouette Score", "N/A")
+                    with col4:
+                        if not np.isnan(metrics.get("calinski_harabasz_score", np.nan)):
+                            st.metric("Calinski-Harabasz", f"{metrics['calinski_harabasz_score']:.1f}")
+                        else:
+                            st.metric("Calinski-Harabasz", "N/A")
+                    
+                    # Интерпретация кластеров
+                    st.subheader("🔍 Интерпретация кластеров")
+                    interpretation = clusterer.get_cluster_interpretation()
+                    
+                    if interpretation:
+                        for cluster_id, info in interpretation.items():
+                            with st.expander(f"Кластер {cluster_id} ({info['n_samples']} образцов)"):
+                                st.markdown(f"**Интерпретация:** {info['interpretation']}")
+                                st.markdown(f"**Топ признаки:** {info['features_str']}")
+                                
+                                # Показываем средние значения признаков
+                                if clusterer.cluster_stats_:
+                                    cluster_means = clusterer.cluster_stats_["means"].loc[cluster_id]
+                                    top_features = cluster_means.nlargest(10)
+                                    st.dataframe(
+                                        pd.DataFrame({
+                                            "Признак": top_features.index,
+                                            "Среднее значение": top_features.values
+                                        }),
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+                    else:
+                        st.warning("Не удалось интерпретировать кластеры")
+                    
+                    # Визуализация
+                    st.subheader("📈 Визуализация кластеров")
+                    
+                    # UMAP визуализация
+                    if st.checkbox("Показать UMAP визуализацию", value=True):
+                        with st.spinner("Обучение UMAP..."):
+                            try:
+                                clusterer.fit_umap(df_features, n_neighbors=5, min_dist=0.1)
+                                
+                                import tempfile
+                                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                                    tmp_path = Path(tmp_file.name)
+                                
+                                clusterer.visualize_clusters(df_features, save_path=tmp_path)
+                                
+                                if tmp_path.exists():
+                                    st.image(str(tmp_path))
+                                    tmp_path.unlink()
+                            except Exception as e:
+                                st.error(f"Ошибка при визуализации: {e}")
+                    
+                    # Таблица с результатами
+                    st.subheader("📋 Результаты кластеризации")
+                    df_with_clusters = clusterer.transform(df_features)
+                    
+                    # Показываем распределение по кластерам
+                    cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
+                    st.markdown("**Распределение по кластерам:**")
+                    st.dataframe(
+                        pd.DataFrame({
+                            "Кластер": cluster_counts.index,
+                            "Число образцов": cluster_counts.values
+                        }),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Таблица с образцами
+                    display_cols = ["image", "cluster"]
+                    if "PC1" in df_with_clusters.columns:
+                        display_cols.append("PC1")
+                    if "PC1_spectrum" in df_with_clusters.columns:
+                        display_cols.append("PC1_spectrum")
+                    
+                    st.dataframe(
+                        df_with_clusters[display_cols].sort_values("cluster"),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Скачивание результатов
+                    csv_clusters = df_with_clusters.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Скачать результаты кластеризации (CSV)",
+                        data=csv_clusters,
+                        file_name=f"clustering_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            else:
+                st.info("Загрузите данные для кластеризации")
 
     else:
         st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")

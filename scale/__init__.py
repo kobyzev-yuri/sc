@@ -13,6 +13,8 @@ from . import aggregate
 from . import pca_scoring
 from . import spectral_analysis
 from . import clustering
+from . import preprocessing
+from . import eda
 from . import dashboard
 from . import scale_comparison
 
@@ -21,6 +23,8 @@ __all__ = [
     "pca_scoring",
     "spectral_analysis",
     "clustering",
+    "preprocessing",
+    "eda",
     "dashboard",
     "scale_comparison",
 ]
