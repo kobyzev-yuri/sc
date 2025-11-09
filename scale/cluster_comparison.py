@@ -334,4 +334,129 @@ class ClusterComparison:
                 }
         
         return summary
+    
+    def recommend_best(self, criteria: str = "silhouette") -> Dict:
+        """
+        Рекомендует лучший кластеризатор на основе метрик.
+        
+        Args:
+            criteria: Критерий выбора ("silhouette", "calinski_harabasz", "davies_bouldin", "composite")
+                    - silhouette: максимизировать Silhouette Score (чем выше, тем лучше)
+                    - calinski_harabasz: максимизировать Calinski-Harabasz Score (чем выше, тем лучше)
+                    - davies_bouldin: минимизировать Davies-Bouldin Score (чем ниже, тем лучше)
+                    - composite: комбинированный критерий
+        
+        Returns:
+            Словарь с рекомендацией: {"best": имя, "reason": объяснение, "scores": все оценки}
+        """
+        if not self.metrics:
+            raise ValueError("Нет метрик для сравнения. Используйте load_clusterer() сначала.")
+        
+        metrics_df = self.compare_metrics()
+        
+        # Исключаем кластеризации с NaN метриками
+        valid_metrics = metrics_df.dropna(subset=["silhouette_score", "calinski_harabasz_score", "davies_bouldin_score"])
+        
+        if len(valid_metrics) == 0:
+            return {
+                "best": None,
+                "reason": "Нет валидных метрик для сравнения",
+                "scores": {}
+            }
+        
+        scores = {}
+        best_name = None
+        best_score = None
+        reason = ""
+        
+        if criteria == "silhouette":
+            # Максимизируем Silhouette Score
+            valid_metrics = valid_metrics[valid_metrics["silhouette_score"].notna()]
+            if len(valid_metrics) > 0:
+                best_idx = valid_metrics["silhouette_score"].idxmax()
+                best_name = valid_metrics.loc[best_idx, "Имя"]
+                best_score = valid_metrics.loc[best_idx, "silhouette_score"]
+                reason = f"Лучший Silhouette Score: {best_score:.4f} (чем выше, тем лучше кластеры разделены)"
+                
+                for _, row in valid_metrics.iterrows():
+                    scores[row["Имя"]] = {
+                        "silhouette": row["silhouette_score"],
+                        "rank": (valid_metrics["silhouette_score"] >= row["silhouette_score"]).sum()
+                    }
+        
+        elif criteria == "calinski_harabasz":
+            # Максимизируем Calinski-Harabasz Score
+            valid_metrics = valid_metrics[valid_metrics["calinski_harabasz_score"].notna()]
+            if len(valid_metrics) > 0:
+                best_idx = valid_metrics["calinski_harabasz_score"].idxmax()
+                best_name = valid_metrics.loc[best_idx, "Имя"]
+                best_score = valid_metrics.loc[best_idx, "calinski_harabasz_score"]
+                reason = f"Лучший Calinski-Harabasz Score: {best_score:.4f} (чем выше, тем лучше разделение кластеров)"
+                
+                for _, row in valid_metrics.iterrows():
+                    scores[row["Имя"]] = {
+                        "calinski_harabasz": row["calinski_harabasz_score"],
+                        "rank": (valid_metrics["calinski_harabasz_score"] >= row["calinski_harabasz_score"]).sum()
+                    }
+        
+        elif criteria == "davies_bouldin":
+            # Минимизируем Davies-Bouldin Score
+            valid_metrics = valid_metrics[valid_metrics["davies_bouldin_score"].notna()]
+            if len(valid_metrics) > 0:
+                best_idx = valid_metrics["davies_bouldin_score"].idxmin()
+                best_name = valid_metrics.loc[best_idx, "Имя"]
+                best_score = valid_metrics.loc[best_idx, "davies_bouldin_score"]
+                reason = f"Лучший Davies-Bouldin Score: {best_score:.4f} (чем ниже, тем лучше разделение кластеров)"
+                
+                for _, row in valid_metrics.iterrows():
+                    scores[row["Имя"]] = {
+                        "davies_bouldin": row["davies_bouldin_score"],
+                        "rank": (valid_metrics["davies_bouldin_score"] <= row["davies_bouldin_score"]).sum()
+                    }
+        
+        elif criteria == "composite":
+            # Комбинированный критерий: нормализуем все метрики и суммируем
+            valid_metrics = valid_metrics[
+                valid_metrics["silhouette_score"].notna() &
+                valid_metrics["calinski_harabasz_score"].notna() &
+                valid_metrics["davies_bouldin_score"].notna()
+            ]
+            
+            if len(valid_metrics) > 0:
+                # Нормализуем метрики (0-1)
+                silhouette_norm = (valid_metrics["silhouette_score"] - valid_metrics["silhouette_score"].min()) / (
+                    valid_metrics["silhouette_score"].max() - valid_metrics["silhouette_score"].min() + 1e-10
+                )
+                calinski_norm = (valid_metrics["calinski_harabasz_score"] - valid_metrics["calinski_harabasz_score"].min()) / (
+                    valid_metrics["calinski_harabasz_score"].max() - valid_metrics["calinski_harabasz_score"].min() + 1e-10
+                )
+                davies_norm = 1 - (valid_metrics["davies_bouldin_score"] - valid_metrics["davies_bouldin_score"].min()) / (
+                    valid_metrics["davies_bouldin_score"].max() - valid_metrics["davies_bouldin_score"].min() + 1e-10
+                )
+                
+                # Композитный score (все метрики равнозначны)
+                composite_scores = silhouette_norm + calinski_norm + davies_norm
+                
+                best_idx = composite_scores.idxmax()
+                best_name = valid_metrics.loc[best_idx, "Имя"]
+                best_score = composite_scores.loc[best_idx]
+                reason = f"Лучший композитный score: {best_score:.4f} (комбинация всех метрик)"
+                
+                for idx, row in valid_metrics.iterrows():
+                    scores[row["Имя"]] = {
+                        "composite": float(composite_scores.loc[idx]),
+                        "silhouette_norm": float(silhouette_norm.loc[idx]),
+                        "calinski_norm": float(calinski_norm.loc[idx]),
+                        "davies_norm": float(davies_norm.loc[idx]),
+                        "rank": (composite_scores >= composite_scores.loc[idx]).sum()
+                    }
+        
+        return {
+            "best": best_name,
+            "best_score": float(best_score) if best_score is not None else None,
+            "reason": reason,
+            "criteria": criteria,
+            "scores": scores,
+            "all_metrics": valid_metrics.to_dict('records') if len(valid_metrics) > 0 else []
+        }
 

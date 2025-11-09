@@ -1828,8 +1828,78 @@ def render_dashboard():
                         if "cluster_comparison" in st.session_state:
                             comparison = st.session_state.cluster_comparison
                             
+                            # Рекомендация лучшего кластеризатора
+                            st.subheader("🏆 Рекомендация лучшего кластеризатора")
+                            
+                            criteria = st.selectbox(
+                                "Критерий выбора",
+                                ["silhouette", "calinski_harabasz", "davies_bouldin", "composite"],
+                                help="silhouette: максимизировать разделение кластеров. calinski_harabasz: максимизировать разделение. davies_bouldin: минимизировать перекрытие. composite: комбинация всех метрик."
+                            )
+                            
+                            if st.button("🎯 Найти лучший кластеризатор"):
+                                with st.spinner("Анализ метрик..."):
+                                    try:
+                                        recommendation = comparison.recommend_best(criteria=criteria)
+                                        
+                                        if recommendation["best"]:
+                                            st.success(f"✅ **Рекомендуемый кластеризатор: {recommendation['best']}**")
+                                            st.info(f"💡 {recommendation['reason']}")
+                                            
+                                            # Сохраняем рекомендацию
+                                            st.session_state.best_clusterer = recommendation["best"]
+                                            st.session_state.recommendation = recommendation
+                                            
+                                            # Показываем ранжирование
+                                            if recommendation["scores"]:
+                                                st.markdown("**Ранжирование всех кластеризаторов:**")
+                                                ranking_data = []
+                                                for name, score_info in recommendation["scores"].items():
+                                                    ranking_data.append({
+                                                        "Кластеризатор": name,
+                                                        "Ранг": score_info.get("rank", "N/A"),
+                                                        "Score": f"{score_info.get('composite', score_info.get('silhouette', score_info.get('calinski_harabasz', score_info.get('davies_bouldin', 'N/A')))):.4f}" if isinstance(score_info.get('composite', score_info.get('silhouette', score_info.get('calinski_harabasz', score_info.get('davies_bouldin')))), (int, float)) else "N/A"
+                                                    })
+                                                st.dataframe(pd.DataFrame(ranking_data).sort_values("Ранг"), use_container_width=True, hide_index=True)
+                                        else:
+                                            st.warning("⚠️ Не удалось определить лучший кластеризатор")
+                                    except Exception as e:
+                                        st.error(f"Ошибка при анализе: {e}")
+                            
+                            # Показываем сохраненную рекомендацию
+                            if "best_clusterer" in st.session_state:
+                                st.info(f"💾 Текущая рекомендация: **{st.session_state.best_clusterer}**")
+                            
                             # Метрики
                             st.subheader("📊 Метрики качества")
+                            
+                            with st.expander("ℹ️ Как интерпретировать метрики?"):
+                                st.markdown("""
+                                **Silhouette Score (-1 до 1):**
+                                - Чем выше, тем лучше разделены кластеры
+                                - > 0.5: хорошее разделение
+                                - > 0.7: отличное разделение
+                                
+                                **Calinski-Harabasz Score:**
+                                - Чем выше, тем лучше разделение кластеров
+                                - Показывает отношение межкластерной дисперсии к внутрикластерной
+                                
+                                **Davies-Bouldin Score:**
+                                - Чем ниже, тем лучше разделение
+                                - Показывает среднее "сходство" между кластерами
+                                - < 1.0: хорошее разделение
+                                
+                                **Число кластеров:**
+                                - Оптимальное число зависит от данных
+                                - Слишком много: переобучение
+                                - Слишком мало: потеря информации
+                                
+                                **Шум (outliers):**
+                                - Только для HDBSCAN
+                                - Образцы, не попавшие ни в один кластер
+                                - Много шума может указывать на проблемы с параметрами
+                                """)
+                            
                             metrics_df = comparison.compare_metrics()
                             st.dataframe(metrics_df, use_container_width=True, hide_index=True)
                             
@@ -1904,6 +1974,79 @@ def render_dashboard():
                                                 tmp_path.unlink()
                                         except Exception as e:
                                             st.error(f"Ошибка при визуализации: {e}")
+                                
+                                # Использование лучшей шкалы
+                                st.subheader("🚀 Использование лучшей шкалы")
+                                
+                                if "best_clusterer" in st.session_state:
+                                    best_name = st.session_state.best_clusterer
+                                    
+                                    st.success(f"✅ Используется лучший кластеризатор: **{best_name}**")
+                                    
+                                    # Показываем scores для лучшего кластеризатора
+                                    if best_name in comparison.scores:
+                                        best_scores = comparison.scores[best_name]
+                                        
+                                        st.markdown("**Cluster scores для всех образцов:**")
+                                        display_df = best_scores[["image", "cluster", "cluster_score"]].copy()
+                                        display_df = display_df.sort_values("cluster_score", ascending=False)
+                                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                                        
+                                        # Статистика
+                                        scores_values = best_scores["cluster_score"].dropna()
+                                        col1, col2, col3, col4 = st.columns(4)
+                                        with col1:
+                                            st.metric("Mean Score", f"{scores_values.mean():.3f}")
+                                        with col2:
+                                            st.metric("Std Score", f"{scores_values.std():.3f}")
+                                        with col3:
+                                            st.metric("Min Score", f"{scores_values.min():.3f}")
+                                        with col4:
+                                            st.metric("Max Score", f"{scores_values.max():.3f}")
+                                        
+                                        # Интерпретация шкалы
+                                        with st.expander("💡 Как использовать cluster_score?"):
+                                            st.markdown(f"""
+                                            **Шкала патологии (0-1) для кластеризатора {best_name}:**
+                                            
+                                            - **0.0 - 0.3**: Нормальные/здоровые образцы
+                                            - **0.3 - 0.6**: Легкая патология
+                                            - **0.6 - 0.8**: Умеренная патология
+                                            - **0.8 - 1.0**: Тяжелая патология
+                                            
+                                            **Применение к новым данным:**
+                                            1. Загрузите новые JSON файлы с предсказаниями
+                                            2. Перейдите на вкладку "🔗 Кластеризация"
+                                            3. Загрузите сохраненный кластеризатор `{best_name}.pkl`
+                                            4. Примените `transform()` для получения cluster labels
+                                            5. Используйте сохраненный ClusterScorer для получения cluster_score
+                                            
+                                            **Программное использование:**
+                                            ```python
+                                            from scale import clustering, cluster_scoring
+                                            
+                                            # Загрузка лучшего кластеризатора
+                                            clusterer = clustering.ClusterAnalyzer.load("models/{best_name}.pkl")
+                                            
+                                            # Применение к новым данным
+                                            df_with_clusters = clusterer.transform(df_new_data)
+                                            
+                                            # Маппинг на шкалу (если scorer сохранен)
+                                            scorer = cluster_scoring.ClusterScorer.load("models/scorer_{best_name}.pkl")
+                                            df_with_scores = scorer.transform(df_with_clusters)
+                                            ```
+                                            """)
+                                        
+                                        # Скачивание лучшей шкалы
+                                        csv_best = display_df.to_csv(index=False)
+                                        st.download_button(
+                                            label=f"📥 Скачать scores лучшего кластеризатора ({best_name})",
+                                            data=csv_best,
+                                            file_name=f"best_cluster_scores_{best_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                            mime="text/csv"
+                                        )
+                                else:
+                                    st.info("💡 Сначала нажмите '🎯 Найти лучший кластеризатор' для рекомендации")
                                 
                                 # Скачивание результатов
                                 st.subheader("💾 Скачивание результатов")
