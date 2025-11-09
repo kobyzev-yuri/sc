@@ -2070,6 +2070,170 @@ def render_dashboard():
                         st.warning("⚠️ Выберите минимум 2 кластеризатора для сравнения")
             else:
                 st.info("Загрузите данные для сравнения кластеризаций")
+        
+        # Вкладка сравнения разных методов построения шкалы
+        with tab_methods:
+            st.header("🔬 Сравнение методов построения шкалы")
+            st.markdown("""
+            Сравните разные подходы к построению шкалы патологии:
+            - **PCA Scoring**: простая нормализация PC1
+            - **Spectral Analysis**: PCA + выявление мод через KDE/GMM
+            - **Cluster-based Scoring**: кластеризация + маппинг кластеров на шкалу
+            """)
+            
+            if len(df_features) > 0:
+                st.subheader("📊 Доступные результаты")
+                
+                # Проверяем, есть ли результаты PCA/Spectral в session state
+                has_pca = "analyzer" in st.session_state or "df_results" in st.session_state
+                has_cluster = "cluster_comparison" in st.session_state
+                
+                if not has_pca and not has_cluster:
+                    st.warning("⚠️ Нет результатов для сравнения")
+                    st.info("""
+                    **Для сравнения методов:**
+                    1. Выполните PCA/Spectral анализ на вкладке "🔬 Спектральный анализ"
+                    2. Или выполните кластеризацию на вкладке "🔗 Кластеризация"
+                    3. Затем вернитесь сюда для сравнения
+                    """)
+                else:
+                    # Создаем объект сравнения
+                    method_comp = method_comparison.MethodComparison()
+                    
+                    # Добавляем PCA/Spectral результаты
+                    if has_pca and "df_results" in st.session_state:
+                        df_results = st.session_state.df_results
+                        if "PC1_norm" in df_results.columns:
+                            method_comp.add_pca_result("PCA Scoring", df_results)
+                        if "PC1_spectrum" in df_results.columns:
+                            method_comp.add_spectral_result("Spectral Analysis", df_results)
+                    
+                    # Добавляем кластерные результаты
+                    if has_cluster:
+                        comparison = st.session_state.cluster_comparison
+                        if comparison.scores:
+                            for name, df_scores in comparison.scores.items():
+                                method_comp.add_cluster_result(f"Cluster: {name}", df_scores)
+                    
+                    if len(method_comp.results) == 0:
+                        st.warning("⚠️ Нет валидных результатов для сравнения")
+                    elif len(method_comp.results) < 2:
+                        st.warning("⚠️ Нужно минимум 2 метода для сравнения")
+                        st.info("Выполните анализ на других вкладках, чтобы добавить больше методов")
+                    else:
+                        st.success(f"✅ Найдено {len(method_comp.results)} методов для сравнения")
+                        
+                        # Статистика
+                        st.subheader("📈 Статистика по методам")
+                        stats_df = method_comp.compute_statistics()
+                        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+                        
+                        # Корреляции
+                        st.subheader("🔗 Корреляции между методами")
+                        try:
+                            corr_df = method_comp.compute_correlations()
+                            st.dataframe(corr_df, use_container_width=True, hide_index=True)
+                            
+                            with st.expander("ℹ️ Как интерпретировать корреляции?"):
+                                st.markdown("""
+                                **Pearson correlation (r):**
+                                - Близко к 1: методы дают похожие результаты
+                                - Близко к 0: методы независимы
+                                - Близко к -1: методы противоположны
+                                
+                                **Spearman correlation (ρ):**
+                                - Аналогично Pearson, но для рангов
+                                - Менее чувствителен к выбросам
+                                - Показывает монотонную связь
+                                """)
+                        except Exception as e:
+                            st.error(f"Ошибка при вычислении корреляций: {e}")
+                        
+                        # Схожесть распределений
+                        st.subheader("📊 Схожесть распределений")
+                        try:
+                            dist_sim_df = method_comp.compute_distribution_similarity()
+                            st.dataframe(dist_sim_df, use_container_width=True, hide_index=True)
+                        except Exception as e:
+                            st.error(f"Ошибка при вычислении схожести: {e}")
+                        
+                        # Визуализация
+                        st.subheader("📈 Визуализация сравнения")
+                        if st.button("📊 Создать графики сравнения методов"):
+                            with st.spinner("Создание графиков..."):
+                                try:
+                                    import tempfile
+                                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                                        tmp_path = Path(tmp_file.name)
+                                    
+                                    method_comp.visualize_comparison(save_path=tmp_path)
+                                    
+                                    if tmp_path.exists():
+                                        st.image(str(tmp_path))
+                                        
+                                        # Кнопка скачивания
+                                        with open(tmp_path, "rb") as f:
+                                            st.download_button(
+                                                label="📥 Скачать график",
+                                                data=f.read(),
+                                                file_name=f"method_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                                mime="image/png"
+                                            )
+                                        
+                                        tmp_path.unlink()
+                                except Exception as e:
+                                    st.error(f"Ошибка при визуализации: {e}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
+                        
+                        # Рекомендация лучшего метода
+                        st.subheader("🏆 Рекомендация лучшего метода")
+                        
+                        criteria = st.selectbox(
+                            "Критерий выбора",
+                            ["consistency", "spread", "correlation"],
+                            help="consistency: наименьшая вариативность. spread: наибольший разброс. correlation: наибольшая корреляция с другими методами."
+                        )
+                        
+                        if st.button("🎯 Найти лучший метод"):
+                            with st.spinner("Анализ методов..."):
+                                try:
+                                    recommendation = method_comp.recommend_best(criteria=criteria)
+                                    
+                                    if recommendation.get("best"):
+                                        st.success(f"✅ **Рекомендуемый метод: {recommendation['best']}**")
+                                        st.info(f"💡 {recommendation['reason']}")
+                                        
+                                        if "scores" in recommendation:
+                                            st.markdown("**Оценки всех методов:**")
+                                            scores_df = pd.DataFrame([
+                                                {"Метод": k, "Score": f"{v:.4f}"}
+                                                for k, v in recommendation["scores"].items()
+                                            ])
+                                            st.dataframe(scores_df, use_container_width=True, hide_index=True)
+                                    else:
+                                        st.warning(f"⚠️ {recommendation.get('reason', 'Не удалось определить лучший метод')}")
+                                except Exception as e:
+                                    st.error(f"Ошибка при анализе: {e}")
+                        
+                        # Сравнение scores
+                        st.subheader("📋 Сравнение scores по образцам")
+                        try:
+                            comparison_df = method_comp.compare_scores()
+                            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+                            
+                            # Скачивание
+                            csv_comparison = comparison_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Скачать сравнение методов (CSV)",
+                                data=csv_comparison,
+                                file_name=f"method_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv"
+                            )
+                        except Exception as e:
+                            st.error(f"Ошибка при сравнении: {e}")
+            else:
+                st.info("Загрузите данные для сравнения методов")
 
     else:
         st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")
