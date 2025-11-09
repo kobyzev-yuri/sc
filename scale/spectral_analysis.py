@@ -393,6 +393,83 @@ class SpectralAnalyzer:
 
             ax1.plot(x_grid, density, "b-", linewidth=2, label="KDE")
             ax1.fill_between(x_grid, density, alpha=0.3)
+            
+            # Визуализация GMM компонентов (если обучен)
+            if self.gmm is not None:
+                # Вычисляем общую плотность GMM для каждой точки
+                gmm_density = np.exp(self.gmm.score_samples(x_grid.reshape(-1, 1)))
+                
+                # Нормализуем для визуализации (масштабируем к KDE)
+                # Используем интеграл для правильного масштабирования
+                kde_integral = np.trapz(density, x_grid)
+                gmm_integral = np.trapz(gmm_density, x_grid)
+                if gmm_integral > 0:
+                    scale_factor = kde_integral / gmm_integral
+                    gmm_density_normalized = gmm_density * scale_factor
+                else:
+                    gmm_density_normalized = gmm_density * (density.max() / gmm_density.max()) if gmm_density.max() > 0 else gmm_density
+                
+                # Вычисляем качество аппроксимации
+                pc1_values_reshaped = pc1_values.reshape(-1, 1)
+                log_likelihood = self.gmm.score(pc1_values_reshaped)
+                bic = self.gmm.bic(pc1_values_reshaped)
+                aic = self.gmm.aic(pc1_values_reshaped)
+                
+                # Вычисляем ошибку аппроксимации (RMSE между KDE и GMM)
+                kde_on_grid = kde(x_grid)
+                rmse = np.sqrt(np.mean((kde_on_grid - gmm_density_normalized)**2))
+                max_error = np.max(np.abs(kde_on_grid - gmm_density_normalized))
+                
+                # Общая смесь GMM
+                ax1.plot(x_grid, gmm_density_normalized, "m-", linewidth=3, alpha=0.9, 
+                        label=f"GMM смесь ({self.gmm.n_components} компонентов, RMSE={rmse:.4f})", zorder=4)
+                
+                # Визуализация отдельных компонентов GMM
+                gmm_means = self.gmm.means_.flatten()
+                gmm_covariances = self.gmm.covariances_.flatten()
+                gmm_weights = self.gmm.weights_
+                
+                # Сортируем компоненты по весу (от большего к меньшему) для лучшей визуализации
+                sorted_indices = np.argsort(gmm_weights)[::-1]
+                
+                # Цвета для разных компонентов
+                component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
+                
+                for idx, i in enumerate(sorted_indices):
+                    mean = gmm_means[i]
+                    cov = gmm_covariances[i]
+                    weight = gmm_weights[i]
+                    color = component_colors[i]
+                    
+                    # Вычисляем плотность отдельного гауссиана
+                    std = np.sqrt(cov)
+                    gaussian_density = weight * stats.norm.pdf(x_grid, mean, std)
+                    # Масштабируем так же, как общую смесь
+                    if gmm_integral > 0:
+                        gaussian_density_scaled = gaussian_density * scale_factor
+                    else:
+                        gaussian_density_scaled = gaussian_density * (density.max() / gmm_density.max()) if gmm_density.max() > 0 else gaussian_density
+                    
+                    # Рисуем отдельный компонент (только если вес значимый)
+                    if weight > 0.01:  # Показываем только компоненты с весом > 1%
+                        ax1.plot(x_grid, gaussian_density_scaled, "--", linewidth=1.5, alpha=0.5, 
+                                color=color, label=f"Компонент {i+1} (μ={mean:.2f}, σ={std:.2f}, w={weight:.2f})")
+                    
+                    # Отмечаем центр компонента вертикальной линией на оси X (не на уровне плотности!)
+                    # Высота = вес компонента, масштабированный к максимуму плотности
+                    center_height = weight * density.max() * 0.1  # 10% от максимума для видимости
+                    ax1.axvline(mean, color=color, linestyle=':', linewidth=2, alpha=0.7, 
+                               label=f"μ{i+1}={mean:.2f}" if idx == 0 else "")
+                    
+                    # Небольшой маркер на оси X для центра
+                    ax1.scatter([mean], [0], color=color, s=80, marker='|', linewidths=3, 
+                              zorder=7, label="")
+                
+                # Добавляем информацию о качестве в заголовок или текст
+                quality_text = f"GMM: LL={log_likelihood:.1f}, BIC={bic:.1f}, RMSE={rmse:.4f}"
+                ax1.text(0.02, 0.98, quality_text, transform=ax1.transAxes, 
+                        fontsize=9, verticalalignment='top', 
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
 
         # Отметка мод
         if self.modes:

@@ -114,6 +114,8 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
 
             count_col = col.replace("area", "count")
             if count_col in df.columns:
+                # Формула из ноутбука: relative_area / count
+                # Заменяем 0 на NaN, чтобы избежать деления на 0
                 count_values = df[count_col].replace(0, np.nan)
                 df_new[col.replace("area", "mean_relative_area")] = (
                     relative_area / count_values
