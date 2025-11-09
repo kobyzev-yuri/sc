@@ -43,6 +43,8 @@
 - ✅ Препроцессинг данных (анализ корреляций, удаление избыточных признаков) - `scale/preprocessing.py`
 - ✅ EDA (визуализации, корреляции, UMAP, статистические тесты) - `scale/eda.py`
 - ✅ Кластерный маппинг на шкалу 0-1 - `scale/cluster_scoring.py`
+- ✅ Сравнение нескольких кластеризаций - `scale/cluster_comparison.py`
+- ✅ Сравнение разных методов построения шкалы (PCA/Spectral/Cluster) - `scale/method_comparison.py`
 - ✅ Веб-дашборд с полной интеграцией всех методов - `scale/dashboard.py`
 
 ❌ **Не реализовано (опционально):**
@@ -272,6 +274,8 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
 - `scale/pca_scoring.py` - ✅ базовая PCA шкала
 - `scale/spectral_analysis.py` - ✅ спектральный анализ с модами (расширенный)
 - `scale/cluster_scoring.py` - ✅ вариант C (кластерный маппинг)
+- `scale/cluster_comparison.py` - ✅ сравнение нескольких кластеризаций
+- `scale/method_comparison.py` - ✅ сравнение PCA/Spectral/Cluster методов
 - `scale/anomaly_detection.py` - вариант A (новый, опционально)
 - `scale/regression.py` - вариант B (новый, опционально)
 - `models/spectral_analyzer.pkl` - сохраненная модель спектрального анализа
@@ -298,6 +302,8 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
    - Спектральный анализ с визуализацией
    - Анализ конкретных образцов с рекомендациями
    - Кластеризация с визуализацией и интерпретацией
+   - **Сравнение нескольких кластеризаций** с автоматической рекомендацией лучшего
+   - **Сравнение разных методов построения шкалы** (PCA/Spectral/Cluster)
    - Отображение важности признаков (PC1 loadings)
    - Корреляционный анализ с удалением избыточных признаков
    - Сохранение экспериментов в директорию `experiments/`
@@ -380,6 +386,8 @@ scale/
 ├── eda.py                 ✅ (создан)
 ├── clustering.py          ✅ (создан)
 ├── cluster_scoring.py     ✅ (создан)
+├── cluster_comparison.py  ✅ (создан)
+├── method_comparison.py   ✅ (создан)
 ├── dashboard.py           ✅ (создан)
 ├── scale_comparison.py    ✅ (создан)
 ├── anomaly_detection.py   ❌ (новый, опционально)
@@ -390,7 +398,7 @@ scale/
 examples/
 ├── test_with_predictions.py    ✅ (создан)
 ├── test_clustering.py          ✅ (создан)
-├── test_scale_comparison.py    ✅ (создан)
+├── compare_clusterings.py      ✅ (создан)
 ├── README_DASHBOARD.md         ✅ (создан)
 └── README_TESTING.md          ✅ (создан)
 
@@ -482,6 +490,22 @@ pip install streamlit  # для дашборда
 - **[examples/README_DASHBOARD.md](examples/README_DASHBOARD.md)** - Руководство по использованию веб-дашборда
 - **[examples/README_TESTING.md](examples/README_TESTING.md)** - Примеры использования модулей
 - **[ANALYSIS.md](ANALYSIS.md)** - Анализ результатов и известные проблемы
+
+## Новые возможности
+
+### Сравнение кластеризаций
+- Загрузка нескольких сохраненных кластеризаторов
+- Сравнение метрик качества (Silhouette, Calinski-Harabasz, Davies-Bouldin)
+- Автоматическая рекомендация лучшего кластеризатора
+- Маппинг всех кластеризаций на шкалу 0-1
+- Визуализация сравнения
+
+### Сравнение методов построения шкалы
+- Сравнение PCA Scoring, Spectral Analysis и Cluster-based Scoring
+- Вычисление корреляций (Pearson, Spearman)
+- Схожесть распределений (Jensen-Shannon divergence)
+- Визуализация сравнения (6 графиков)
+- Рекомендация лучшего метода по критериям
 
 ## Следующие шаги
 
