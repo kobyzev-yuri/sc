@@ -33,7 +33,7 @@ except ImportError as e:
         f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
     ) from e
 
-from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda, cluster_comparison, cluster_scoring
+from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda, cluster_comparison, cluster_scoring, method_comparison
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -356,13 +356,13 @@ def render_dashboard():
         }
 
         # Вкладки для визуализации
-        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация", "⚖️ Сравнение кластеризаций"]
+        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация", "⚖️ Сравнение кластеризаций", "🔬 Сравнение методов построения шкалы"]
         if enable_comparison:
             tab_names.append("⚖️ Сравнение методов")
         
         tabs = st.tabs(tab_names)
-        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering, tab_compare = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7]
-        tab_comparison = tabs[8] if enable_comparison else None
+        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering, tab_compare, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7], tabs[8]
+        tab_comparison = tabs[9] if enable_comparison else None
 
         with tab1:
             st.header("Загруженные данные")
