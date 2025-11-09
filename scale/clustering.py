@@ -135,13 +135,20 @@ class ClusterAnalyzer:
         
         # Кластеризация
         if self.method == "hdbscan":
-            if not HDBSCAN_AVAILABLE:
-                raise ImportError("hdbscan не установлен. Установите: pip install hdbscan")
+            # Динамическая проверка импорта (на случай, если модуль был установлен после загрузки)
+            try:
+                import hdbscan as hdbscan_module
+            except ImportError:
+                if not HDBSCAN_AVAILABLE:
+                    raise ImportError("hdbscan не установлен. Установите: pip install hdbscan")
+                else:
+                    # Используем глобальный импорт, если он был успешным при загрузке модуля
+                    hdbscan_module = hdbscan
             
             if min_samples is None:
                 min_samples = min_cluster_size
             
-            self.clusterer = hdbscan.HDBSCAN(
+            self.clusterer = hdbscan_module.HDBSCAN(
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
                 cluster_selection_epsilon=cluster_selection_epsilon,
@@ -239,6 +246,14 @@ class ClusterAnalyzer:
         
         # Предсказание кластеров
         if self.method == "hdbscan":
+            # Динамическая проверка импорта
+            try:
+                import hdbscan as hdbscan_module
+            except ImportError:
+                if not HDBSCAN_AVAILABLE:
+                    raise ImportError("hdbscan не установлен. Установите: pip install hdbscan")
+                else:
+                    hdbscan_module = hdbscan
             labels = self.clusterer.fit_predict(X_scaled)
         elif self.method == "agglomerative":
             labels = self.clusterer.fit_predict(X_scaled)
@@ -274,8 +289,14 @@ class ClusterAnalyzer:
         Returns:
             self
         """
-        if not UMAP_AVAILABLE:
-            raise ImportError("umap-learn не установлен. Установите: pip install umap-learn")
+        # Динамическая проверка импорта
+        try:
+            import umap as umap_module
+        except ImportError:
+            if not UMAP_AVAILABLE:
+                raise ImportError("umap-learn не установлен. Установите: pip install umap-learn")
+            else:
+                umap_module = umap
         
         if self.feature_columns is None:
             raise ValueError("Кластеризатор не обучен. Вызовите fit() сначала.")
@@ -294,7 +315,7 @@ class ClusterAnalyzer:
             X_scaled = self.pca.transform(X_scaled)
         
         # UMAP
-        self.umap_reducer = umap.UMAP(
+        self.umap_reducer = umap_module.UMAP(
             n_neighbors=n_neighbors,
             n_components=n_components,
             min_dist=min_dist,
