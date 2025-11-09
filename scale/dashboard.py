@@ -33,7 +33,7 @@ except ImportError as e:
         f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
     ) from e
 
-from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda
+from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda, cluster_comparison, cluster_scoring
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -356,13 +356,13 @@ def render_dashboard():
         }
 
         # Вкладки для визуализации
-        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация"]
+        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация", "⚖️ Сравнение кластеризаций"]
         if enable_comparison:
             tab_names.append("⚖️ Сравнение методов")
         
         tabs = st.tabs(tab_names)
-        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
-        tab_comparison = tabs[7] if enable_comparison else None
+        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering, tab_compare = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7]
+        tab_comparison = tabs[8] if enable_comparison else None
 
         with tab1:
             st.header("Загруженные данные")
@@ -1741,6 +1741,26 @@ def render_dashboard():
                         hide_index=True
                     )
                     
+                    # Сохранение и скачивание результатов
+                    st.subheader("💾 Сохранение кластеризатора")
+                    
+                    clusterer_name = st.text_input(
+                        "Имя для сохранения кластеризатора",
+                        value=f"clusterer_{clustering_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        help="Имя файла (без расширения .pkl)"
+                    )
+                    
+                    if st.button("💾 Сохранить кластеризатор"):
+                        models_dir = Path("models")
+                        models_dir.mkdir(exist_ok=True)
+                        
+                        save_path = models_dir / f"{clusterer_name}.pkl"
+                        try:
+                            clusterer.save(save_path)
+                            st.success(f"✅ Кластеризатор сохранен: {save_path}")
+                        except Exception as e:
+                            st.error(f"Ошибка при сохранении: {e}")
+                    
                     # Скачивание результатов
                     csv_clusters = df_with_clusters.to_csv(index=False)
                     st.download_button(
@@ -1751,6 +1771,162 @@ def render_dashboard():
                     )
             else:
                 st.info("Загрузите данные для кластеризации")
+        
+        # Вкладка сравнения кластеризаций
+        with tab_compare:
+            st.header("⚖️ Сравнение сохраненных кластеризаций")
+            st.markdown("Загрузите несколько сохраненных кластеризаций и сравните их результаты, включая маппинг на шкалу 0-1.")
+            
+            if len(df_features) > 0:
+                # Поиск сохраненных кластеризаторов
+                models_dir = Path("models")
+                saved_clusterers = []
+                
+                if models_dir.exists():
+                    saved_clusterers = list(models_dir.glob("clusterer*.pkl"))
+                
+                if not saved_clusterers:
+                    st.warning("⚠️ Не найдено сохраненных кластеризаторов в директории `models/`")
+                    st.info("💡 Сначала сохраните кластеризаторы через вкладку '🔗 Кластеризация'")
+                else:
+                    st.success(f"✅ Найдено {len(saved_clusterers)} сохраненных кластеризаторов")
+                    
+                    # Выбор кластеризаторов для сравнения
+                    st.subheader("📁 Выбор кластеризаторов для сравнения")
+                    
+                    clusterer_names = [f.stem for f in saved_clusterers]
+                    selected_names = st.multiselect(
+                        "Выберите кластеризаторы для сравнения (минимум 2)",
+                        clusterer_names,
+                        default=clusterer_names[:min(3, len(clusterer_names))],
+                        help="Выберите минимум 2 кластеризатора для сравнения"
+                    )
+                    
+                    if len(selected_names) >= 2:
+                        # Загрузка кластеризаторов
+                        if st.button("🔄 Загрузить и сравнить", type="primary"):
+                            with st.spinner("Загрузка кластеризаторов..."):
+                                try:
+                                    comparison = cluster_comparison.ClusterComparison()
+                                    
+                                    clusterer_paths = {
+                                        name: str(models_dir / f"{name}.pkl")
+                                        for name in selected_names
+                                    }
+                                    
+                                    comparison.load_multiple_clusterers(clusterer_paths, df_features)
+                                    
+                                    st.session_state.cluster_comparison = comparison
+                                    st.success(f"✅ Загружено {len(comparison.clusterers)} кластеризаторов")
+                                    
+                                except Exception as e:
+                                    st.error(f"Ошибка при загрузке: {e}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
+                        
+                        # Отображение результатов сравнения
+                        if "cluster_comparison" in st.session_state:
+                            comparison = st.session_state.cluster_comparison
+                            
+                            # Метрики
+                            st.subheader("📊 Метрики качества")
+                            metrics_df = comparison.compare_metrics()
+                            st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+                            
+                            # Распределение по кластерам
+                            st.subheader("📈 Распределение по кластерам")
+                            dist_df = comparison.compare_cluster_distributions()
+                            st.dataframe(dist_df, use_container_width=True, hide_index=True)
+                            
+                            # Маппинг на шкалу
+                            st.subheader("🎯 Маппинг кластеров на шкалу 0-1")
+                            
+                            scoring_method = st.selectbox(
+                                "Метод маппинга",
+                                ["pathology_features", "pc1_centroid", "distance_from_normal"],
+                                help="pathology_features: на основе суммы патологических признаков. pc1_centroid: на основе PC1 центроида. distance_from_normal: на основе расстояния от нормального кластера."
+                            )
+                            
+                            if st.button("🔄 Применить маппинг", type="primary"):
+                                with st.spinner("Применение маппинга..."):
+                                    try:
+                                        comparison.apply_scoring(scoring_method=scoring_method)
+                                        st.success("✅ Маппинг применен!")
+                                    except Exception as e:
+                                        st.error(f"Ошибка при маппинге: {e}")
+                            
+                            # Сравнение scores
+                            if comparison.scores:
+                                st.subheader("📊 Сравнение cluster_score")
+                                
+                                scores_df = comparison.compare_scores()
+                                st.dataframe(scores_df, use_container_width=True, hide_index=True)
+                                
+                                # Статистика
+                                st.markdown("**Статистика cluster_score:**")
+                                stats_rows = []
+                                for name, df_scores in comparison.scores.items():
+                                    scores = df_scores["cluster_score"].dropna()
+                                    stats_rows.append({
+                                        "Кластеризация": name,
+                                        "Mean": f"{scores.mean():.3f}",
+                                        "Std": f"{scores.std():.3f}",
+                                        "Min": f"{scores.min():.3f}",
+                                        "Max": f"{scores.max():.3f}",
+                                        "Median": f"{scores.median():.3f}",
+                                    })
+                                st.dataframe(pd.DataFrame(stats_rows), use_container_width=True, hide_index=True)
+                                
+                                # Визуализация
+                                st.subheader("📈 Визуализация сравнения")
+                                
+                                if st.button("📊 Создать графики сравнения"):
+                                    with st.spinner("Создание графиков..."):
+                                        try:
+                                            import tempfile
+                                            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                                                tmp_path = Path(tmp_file.name)
+                                            
+                                            comparison.visualize_comparison(save_path=tmp_path)
+                                            
+                                            if tmp_path.exists():
+                                                st.image(str(tmp_path))
+                                                
+                                                # Кнопка скачивания
+                                                with open(tmp_path, "rb") as f:
+                                                    st.download_button(
+                                                        label="📥 Скачать график",
+                                                        data=f.read(),
+                                                        file_name=f"cluster_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                                        mime="image/png"
+                                                    )
+                                                
+                                                tmp_path.unlink()
+                                        except Exception as e:
+                                            st.error(f"Ошибка при визуализации: {e}")
+                                
+                                # Скачивание результатов
+                                st.subheader("💾 Скачивание результатов")
+                                
+                                csv_scores = scores_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Скачать сравнение scores (CSV)",
+                                    data=csv_scores,
+                                    file_name=f"cluster_scores_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                    mime="text/csv"
+                                )
+                                
+                                csv_metrics = metrics_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Скачать метрики (CSV)",
+                                    data=csv_metrics,
+                                    file_name=f"cluster_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                    mime="text/csv"
+                                )
+                    else:
+                        st.warning("⚠️ Выберите минимум 2 кластеризатора для сравнения")
+            else:
+                st.info("Загрузите данные для сравнения кластеризаций")
 
     else:
         st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")
