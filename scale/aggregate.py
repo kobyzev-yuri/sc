@@ -145,6 +145,7 @@ def select_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         "EoE_relative_count",
         "Enterocytes_relative_count",
         "Granulomas_relative_count",
+        "Paneth_relative_count",
         "Mild_relative_area",
         "Mild_mean_relative_area",
         "Surface epithelium_relative_area",
@@ -162,6 +163,8 @@ def select_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Enterocytes_relative_area",
         "Enterocytes_mean_relative_area",
         "Granulomas_relative_area",
+        "Paneth_relative_area",
+        "Paneth_mean_relative_area",
     ]
 
     available_cols = [col for col in cols if col in df.columns]

@@ -183,8 +183,9 @@ class SpectralAnalyzer:
         density = kde(x_grid)
 
         # Поиск локальных максимумов (пиков)
+        # Уменьшаем порог для поиска большего числа мод
         peaks, properties = find_peaks(
-            density, height=np.max(density) * 0.1, distance=len(x_grid) // 20
+            density, height=np.max(density) * 0.05, distance=len(x_grid) // 20
         )
 
         modes = []
@@ -192,13 +193,37 @@ class SpectralAnalyzer:
             position = x_grid[peak_idx]
             peak_density = density[peak_idx]
 
-            # Определение типа моды (норма, mild, промежуточная)
-            if position < self.pc1_percentiles["median"]:
+            # Определение типа моды на основе позиции относительно медианы
+            # Используем более мягкую логику: если мода близка к медиане, используем спектральную шкалу
+            median = self.pc1_percentiles["median"]
+            
+            # Если мода значительно ниже медианы - normal
+            if position < median - 0.5 * self.pc1_percentiles.get("std", 1.0):
                 label = "normal"
-            elif position > self.pc1_percentiles["median"]:
+            # Если мода значительно выше медианы - pathology
+            elif position > median + 0.5 * self.pc1_percentiles.get("std", 1.0):
                 label = "pathology"
+            # Если мода близка к медиане - используем спектральную шкалу для классификации
             else:
-                label = "intermediate"
+                # Преобразуем в спектральную шкалу для более точной классификации
+                if self.pc1_p1 is not None and self.pc1_p99 is not None:
+                    mode_spectrum = (position - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+                    mode_spectrum = np.clip(mode_spectrum, 0.0, 1.0)
+                    
+                    if mode_spectrum < 0.2:
+                        label = "normal"
+                    elif mode_spectrum < 0.5:
+                        label = "mild"
+                    elif mode_spectrum < 0.8:
+                        label = "moderate"
+                    else:
+                        label = "severe"
+                else:
+                    # Fallback: используем медиану
+                    if position < median:
+                        label = "normal"
+                    else:
+                        label = "pathology"
 
             modes.append(
                 {
@@ -292,7 +317,22 @@ class SpectralAnalyzer:
 
         df_result["PC1_spectrum"] = pc1_spectrum
 
-        # Нахождение ближайшей моды для каждого значения
+        # Классификация образцов на основе спектральной шкалы
+        # Это более точный способ, чем просто ближайшая мода
+        def classify_by_spectrum(spectrum_value):
+            """Классифицирует образец на основе позиции на спектральной шкале."""
+            if spectrum_value < 0.2:
+                return "normal"
+            elif spectrum_value < 0.5:
+                return "mild"
+            elif spectrum_value < 0.8:
+                return "moderate"
+            else:
+                return "severe"
+        
+        df_result["PC1_mode"] = [classify_by_spectrum(val) for val in pc1_spectrum]
+        
+        # Дополнительно: находим ближайшую моду для информации
         if self.modes:
             mode_positions = np.array([m["position"] for m in self.modes])
             mode_labels = [m["label"] for m in self.modes]
@@ -301,10 +341,14 @@ class SpectralAnalyzer:
             distances = np.abs(pc1_values[:, np.newaxis] - mode_positions)
             nearest_mode_idx = np.argmin(distances, axis=1)
 
-            df_result["PC1_mode"] = [mode_labels[i] for i in nearest_mode_idx]
             df_result["PC1_mode_distance"] = distances[
                 np.arange(len(pc1_values)), nearest_mode_idx
             ]
+            # Дополнительная колонка с меткой ближайшей моды (для справки)
+            df_result["PC1_nearest_mode"] = [mode_labels[i] for i in nearest_mode_idx]
+        else:
+            df_result["PC1_mode_distance"] = np.nan
+            df_result["PC1_nearest_mode"] = None
 
         return df_result
 

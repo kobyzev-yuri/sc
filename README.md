@@ -123,6 +123,12 @@
 - ✅ `load_predictions_batch()` - загрузка всех предсказаний из директории
 - ✅ `create_relative_features()` - создание относительных признаков (нормализация по Crypts)
 - ✅ `select_feature_columns()` - отбор важных признаков
+   
+   **Включенные признаки:**
+   - Mild, Dysplasia, Moderate, Meta, Plasma Cells, Neutrophils, EoE, Enterocytes, Granulomas
+   - **Paneth** ✅ (добавлен в версии с поддержкой Paneth клеток)
+   - Surface epithelium, Muscularis mucosae
+   - Для каждого типа: `relative_count`, `relative_area`, `mean_relative_area`
 
 **Выходные данные:**
 ```csv
@@ -227,7 +233,7 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
      - `fit_spectrum()` - анализ спектра с использованием процентилей (P1, P99)
      - `_find_modes_kde()` - поиск мод через Kernel Density Estimation
      - `fit_gmm()` - обучение Gaussian Mixture Model для моделирования состояний
-     - `transform_to_spectrum()` - преобразование в спектральную шкалу 0-1
+     - `transform_to_spectrum()` - преобразование в спектральную шкалу 0-1 с классификацией
      - `get_spectrum_info()` - получение информации о спектре
      - `visualize_spectrum()` - визуализация спектра на шкале
      - `save()` и `load()` - сохранение/загрузка модели
@@ -237,6 +243,42 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
    - Автоматическое выявление мод (стабильных состояний) через KDE
    - Поддержка GMM для моделирования смеси состояний
    - Визуализация спектра с отображением мод на шкале 0-1
+   - Автоматическая классификация образцов на основе спектральной шкалы
+   
+   **Классификация образцов (PC1_mode):**
+   
+   Классификация основана на позиции образца на спектральной шкале (0-1):
+   
+   | Спектральная шкала | Класс | Описание |
+   |-------------------|-------|----------|
+   | **0.0 - 0.2** | `normal` | Нормальные образцы |
+   | **0.2 - 0.5** | `mild` | Легкая патология |
+   | **0.5 - 0.8** | `moderate` | Умеренная патология |
+   | **0.8 - 1.0** | `severe` | Тяжелая патология |
+   
+   **Формула преобразования PC1 → Spectrum:**
+   ```
+   PC1_spectrum = (PC1 - PC1_p1) / (PC1_p99 - PC1_p1)
+   ```
+   
+   где:
+   - `PC1_p1` = 1-й процентиль PC1 (нижняя граница, по умолчанию)
+   - `PC1_p99` = 99-й процентиль PC1 (верхняя граница, по умолчанию)
+   
+   **Примеры порогов** (для типичных данных):
+   - Spectrum 0.0 → PC1 ≈ -3.4 (начало normal)
+   - Spectrum 0.2 → PC1 ≈ -0.9 (граница normal/mild)
+   - Spectrum 0.5 → PC1 ≈ 2.9 (граница mild/moderate)
+   - Spectrum 0.8 → PC1 ≈ 6.7 (граница moderate/severe)
+   - Spectrum 1.0 → PC1 ≈ 9.2 (конец severe)
+   
+   **Дополнительные колонки в результатах:**
+   - `PC1_spectrum` - позиция на спектральной шкале (0-1)
+   - `PC1_mode` - классификация (normal/mild/moderate/severe)
+   - `PC1_mode_distance` - расстояние до ближайшей моды (для справки)
+   - `PC1_nearest_mode` - метка ближайшей моды (для справки)
+   
+   Подробнее см. [CLASSIFICATION_CRITERIA.md](CLASSIFICATION_CRITERIA.md)
 
 **Вариант A: Anomaly Detection** (для сравнения)
 1. Модуль `anomaly_detection.py`:
@@ -490,6 +532,8 @@ pip install streamlit  # для дашборда
 - **[examples/README_DASHBOARD.md](examples/README_DASHBOARD.md)** - Руководство по использованию веб-дашборда
 - **[examples/README_TESTING.md](examples/README_TESTING.md)** - Примеры использования модулей
 - **[ANALYSIS.md](ANALYSIS.md)** - Анализ результатов и известные проблемы
+- **[CLASSIFICATION_CRITERIA.md](CLASSIFICATION_CRITERIA.md)** - Критерии классификации образцов (normal/mild/moderate/severe) и пороги на спектральной шкале
+- **[HOW_TO_RERUN_ANALYSIS.md](HOW_TO_RERUN_ANALYSIS.md)** - Как перезапустить анализ в веб-интерфейсе
 
 ## Новые возможности
 
