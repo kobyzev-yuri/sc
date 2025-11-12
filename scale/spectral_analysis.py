@@ -281,11 +281,97 @@ class SpectralAnalyzer:
         # Обучение GMM
         self.gmm = GaussianMixture(n_components=n_components, random_state=42)
         self.gmm.fit(pc1_values)
+        
+        # Сохраняем информацию о выборе
+        self.gmm_n_components_auto = n_components if n_components is not None else best_n
+        self.gmm_bic_scores = getattr(self, 'gmm_bic_scores', {})
 
         return self
 
+    def evaluate_gmm_quality(
+        self,
+        df: pd.DataFrame,
+        pc1_column: str = "PC1",
+        max_components: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Оценивает качество аппроксимации GMM для разного числа компонентов.
+        
+        Args:
+            df: DataFrame с колонкой PC1
+            pc1_column: Имя колонки с PC1 значениями
+            max_components: Максимальное число компонентов для оценки
+        
+        Returns:
+            DataFrame с метриками качества для каждого числа компонентов
+        """
+        if pc1_column not in df.columns:
+            raise ValueError(f"Колонка {pc1_column} не найдена в DataFrame")
+        
+        from scipy import stats
+        
+        pc1_values = df[pc1_column].dropna().values
+        
+        # Вычисляем KDE для сравнения
+        if len(pc1_values) > 1:
+            kde = stats.gaussian_kde(pc1_values)
+            x_min, x_max = pc1_values.min(), pc1_values.max()
+            x_range = x_max - x_min
+            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+            kde_density = kde(x_grid)
+        else:
+            return pd.DataFrame()
+        
+        pc1_values_reshaped = pc1_values.reshape(-1, 1)
+        results = []
+        
+        for n in range(1, min(max_components + 1, len(pc1_values) // 2)):
+            try:
+                gmm = GaussianMixture(n_components=n, random_state=42)
+                gmm.fit(pc1_values_reshaped)
+                
+                # Метрики качества
+                log_likelihood = gmm.score(pc1_values_reshaped)
+                bic = gmm.bic(pc1_values_reshaped)
+                aic = gmm.aic(pc1_values_reshaped)
+                
+                # Плотность GMM на сетке
+                gmm_density = np.exp(gmm.score_samples(x_grid.reshape(-1, 1)))
+                
+                # Масштабирование для сравнения с KDE
+                if gmm_density.max() > 0 and kde_density.max() > 0:
+                    scale_factor = kde_density.max() / gmm_density.max()
+                    gmm_density_scaled = gmm_density * scale_factor
+                else:
+                    gmm_density_scaled = gmm_density
+                
+                # RMSE между KDE и GMM
+                rmse = np.sqrt(np.mean((kde_density - gmm_density_scaled)**2))
+                
+                # Максимальная ошибка
+                max_error = np.max(np.abs(kde_density - gmm_density_scaled))
+                
+                # R² (коэффициент детерминации)
+                ss_res = np.sum((kde_density - gmm_density_scaled)**2)
+                ss_tot = np.sum((kde_density - np.mean(kde_density))**2)
+                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                
+                results.append({
+                    "Число компонентов": n,
+                    "BIC": bic,
+                    "AIC": aic,
+                    "Log-Likelihood": log_likelihood,
+                    "RMSE": rmse,
+                    "Max Error": max_error,
+                    "R²": r2,
+                })
+            except Exception as e:
+                continue
+        
+        return pd.DataFrame(results)
+
     def transform_to_spectrum(
-        self, df: pd.DataFrame, pc1_column: str = "PC1"
+        self, df: pd.DataFrame, pc1_column: str = "PC1", use_gmm_classification: bool = False
     ) -> pd.DataFrame:
         """
         Преобразует PC1 значения в спектральную шкалу 0-1 с учетом мод.
@@ -293,12 +379,14 @@ class SpectralAnalyzer:
         Args:
             df: DataFrame с колонкой PC1
             pc1_column: Имя колонки с PC1 значениями
+            use_gmm_classification: Если True, классифицирует образцы по принадлежности к GMM компонентам.
+                                   Если False, использует фиксированные пороги на спектральной шкале.
 
         Returns:
             DataFrame с добавленными колонками:
             - PC1_spectrum: спектральная шкала 0-1 (с процентилями)
-            - PC1_mode: ближайшая мода
-            - PC1_mode_distance: расстояние до ближайшей моды
+            - PC1_mode: классификация (normal/mild/moderate/severe)
+            - PC1_mode_distance: расстояние до ближайшей моды (если есть моды)
         """
         if self.pc1_p1 is None or self.pc1_p99 is None:
             raise ValueError(
@@ -317,20 +405,53 @@ class SpectralAnalyzer:
 
         df_result["PC1_spectrum"] = pc1_spectrum
 
-        # Классификация образцов на основе спектральной шкалы
-        # Это более точный способ, чем просто ближайшая мода
-        def classify_by_spectrum(spectrum_value):
-            """Классифицирует образец на основе позиции на спектральной шкале."""
-            if spectrum_value < 0.2:
-                return "normal"
-            elif spectrum_value < 0.5:
-                return "mild"
-            elif spectrum_value < 0.8:
-                return "moderate"
-            else:
-                return "severe"
-        
-        df_result["PC1_mode"] = [classify_by_spectrum(val) for val in pc1_spectrum]
+        # Классификация образцов
+        if use_gmm_classification and self.gmm is not None:
+            # Классификация на основе принадлежности к GMM компонентам
+            pc1_values_reshaped = pc1_values.reshape(-1, 1)
+            gmm_predictions = self.gmm.predict(pc1_values_reshaped)
+            
+            # Получаем параметры GMM компонентов
+            gmm_means = self.gmm.means_.flatten()
+            gmm_weights = self.gmm.weights_
+            
+            # Преобразуем центры компонентов в спектральную шкалу
+            gmm_spectrum_positions = []
+            for mean in gmm_means:
+                pos = (mean - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+                pos = np.clip(pos, 0.0, 1.0)
+                gmm_spectrum_positions.append(pos)
+            
+            # Классифицируем каждый компонент на основе его позиции
+            component_states = []
+            for spectrum_pos in gmm_spectrum_positions:
+                if spectrum_pos < 0.2:
+                    component_states.append("normal")
+                elif spectrum_pos < 0.5:
+                    component_states.append("mild")
+                elif spectrum_pos < 0.8:
+                    component_states.append("moderate")
+                else:
+                    component_states.append("severe")
+            
+            # Присваиваем образцам состояние их компонента
+            df_result["PC1_mode"] = [component_states[pred] for pred in gmm_predictions]
+            df_result["PC1_gmm_component"] = gmm_predictions  # Для справки
+        else:
+            # Классификация на основе фиксированных порогов спектральной шкалы
+            # Это искусственное разделение на 4 категории для удобства интерпретации
+            def classify_by_spectrum(spectrum_value):
+                """Классифицирует образец на основе позиции на спектральной шкале."""
+                if spectrum_value < 0.2:
+                    return "normal"
+                elif spectrum_value < 0.5:
+                    return "mild"
+                elif spectrum_value < 0.8:
+                    return "moderate"
+                else:
+                    return "severe"
+            
+            df_result["PC1_mode"] = [classify_by_spectrum(val) for val in pc1_spectrum]
         
         # Дополнительно: находим ближайшую моду для информации
         if self.modes:
@@ -390,6 +511,584 @@ class SpectralAnalyzer:
 
         return info
 
+    def get_gmm_components_table(self) -> pd.DataFrame:
+        """
+        Возвращает таблицу с параметрами GMM компонентов для характеристики медицинских состояний.
+
+        Returns:
+            DataFrame с колонками:
+            - Компонент: номер компонента
+            - Медицинское состояние: normal/mild/moderate/severe
+            - Центр (μ) на PC1: позиция центра компонента
+            - Центр на шкале 0-1: позиция на спектральной шкале
+            - Ширина (σ): стандартное отклонение
+            - Вес (w): доля образцов
+            - Доля образцов (%): процент
+        """
+        if self.gmm is None:
+            raise ValueError("GMM не обучен. Вызовите fit_gmm() сначала.")
+        
+        if self.pc1_p1 is None or self.pc1_p99 is None:
+            raise ValueError("Спектр не обучен. Вызовите fit_spectrum() сначала.")
+
+        gmm_means = self.gmm.means_.flatten()
+        gmm_covariances = self.gmm.covariances_.flatten()
+        gmm_weights = self.gmm.weights_
+        gmm_stds = np.sqrt(gmm_covariances)
+        
+        # Преобразуем в спектральную шкалу для интерпретации
+        gmm_spectrum_positions = []
+        for mean in gmm_means:
+            pos = (mean - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+            pos = np.clip(pos, 0.0, 1.0)
+            gmm_spectrum_positions.append(pos)
+        
+        # Сортируем компоненты по позиции на спектральной шкале
+        sorted_indices = np.argsort(gmm_spectrum_positions)
+        
+        # Создаем таблицу параметров
+        gmm_params_data = []
+        for idx in sorted_indices:
+            mean = gmm_means[idx]
+            std = gmm_stds[idx]
+            weight = gmm_weights[idx]
+            spectrum_pos = gmm_spectrum_positions[idx]
+            
+            # Классификация компонента на основе спектральной позиции
+            if spectrum_pos < 0.2:
+                state = "normal"
+            elif spectrum_pos < 0.5:
+                state = "mild"
+            elif spectrum_pos < 0.8:
+                state = "moderate"
+            else:
+                state = "severe"
+            
+            gmm_params_data.append({
+                "Компонент": f"GMM {idx+1}",
+                "Медицинское состояние": state,
+                "Центр (μ) на PC1": mean,
+                "Центр на шкале 0-1": spectrum_pos,
+                "Ширина (σ)": std,
+                "Вес (w)": weight,
+                "Доля образцов (%)": weight * 100
+            })
+        
+        return pd.DataFrame(gmm_params_data)
+
+    def get_gmm_components_table_normalized(self) -> pd.DataFrame:
+        """
+        Возвращает таблицу с параметрами GMM компонентов на нормализованной шкале 0-1.
+
+        Returns:
+            DataFrame с колонками:
+            - Компонент: номер компонента
+            - Медицинское состояние: normal/mild/moderate/severe
+            - Центр (μ) на шкале 0-1: позиция центра компонента на нормализованной шкале
+            - Ширина (σ) на шкале 0-1: стандартное отклонение на нормализованной шкале
+            - Вес (w): доля образцов
+            - Доля образцов (%): процент
+        """
+        if self.gmm is None:
+            raise ValueError("GMM не обучен. Вызовите fit_gmm() сначала.")
+        
+        if self.pc1_p1 is None or self.pc1_p99 is None:
+            raise ValueError("Спектр не обучен. Вызовите fit_spectrum() сначала.")
+
+        gmm_means = self.gmm.means_.flatten()
+        gmm_covariances = self.gmm.covariances_.flatten()
+        gmm_weights = self.gmm.weights_
+        gmm_stds = np.sqrt(gmm_covariances)
+        
+        scale_factor = self.pc1_p99 - self.pc1_p1
+        
+        # Преобразуем параметры на нормализованную шкалу
+        gmm_means_norm = []
+        gmm_stds_norm = []
+        gmm_spectrum_positions = []
+        
+        for mean, std in zip(gmm_means, gmm_stds):
+            mean_norm = (mean - self.pc1_p1) / scale_factor
+            std_norm = std / scale_factor
+            mean_norm = np.clip(mean_norm, 0.0, 1.0)
+            gmm_means_norm.append(mean_norm)
+            gmm_stds_norm.append(std_norm)
+            gmm_spectrum_positions.append(mean_norm)
+        
+        # Сортируем компоненты по позиции на спектральной шкале
+        sorted_indices = np.argsort(gmm_spectrum_positions)
+        
+        # Создаем таблицу параметров
+        gmm_params_data = []
+        for idx in sorted_indices:
+            mean_norm = gmm_means_norm[idx]
+            std_norm = gmm_stds_norm[idx]
+            weight = gmm_weights[idx]
+            
+            # Классификация компонента на основе спектральной позиции
+            if mean_norm < 0.2:
+                state = "normal"
+            elif mean_norm < 0.5:
+                state = "mild"
+            elif mean_norm < 0.8:
+                state = "moderate"
+            else:
+                state = "severe"
+            
+            gmm_params_data.append({
+                "Компонент": f"GMM {idx+1}",
+                "Медицинское состояние": state,
+                "Центр (μ) на шкале 0-1": mean_norm,
+                "Ширина (σ) на шкале 0-1": std_norm,
+                "Вес (w)": weight,
+                "Доля образцов (%)": weight * 100
+            })
+        
+        return pd.DataFrame(gmm_params_data)
+
+    def visualize_gmm_components(
+        self,
+        df: pd.DataFrame,
+        pc1_column: str = "PC1",
+        save_path: Optional[Union[str, Path]] = None,
+        return_figure: bool = False,
+    ):
+        """
+        Визуализирует отдельные GMM компоненты как чистые медицинские состояния.
+
+        ВАЖНО: Гауссианы строятся на НЕ нормализованной шкале PC1 (сырые значения).
+        GMM обучается на сырых значениях PC1, и все параметры (μ, σ) также в сырой шкале.
+        Верхняя ось X показывает нормализованную шкалу 0-1 только для интерпретации.
+
+        Args:
+            df: DataFrame с колонкой PC1
+            pc1_column: Имя колонки с PC1 значениями
+            save_path: Путь для сохранения графика. Если None, график не сохраняется.
+            return_figure: Если True, возвращает matplotlib figure вместо показа/сохранения.
+        
+        Returns:
+            Если return_figure=True, возвращает matplotlib.figure.Figure, иначе None.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            raise ImportError(
+                "matplotlib требуется для визуализации. Установите: pip install matplotlib"
+            ) from e
+
+        if self.gmm is None:
+            raise ValueError("GMM не обучен. Вызовите fit_gmm() сначала.")
+        
+        if pc1_column not in df.columns:
+            raise ValueError(f"Колонка {pc1_column} не найдена в DataFrame")
+
+        pc1_values = df[pc1_column].dropna().values
+        
+        # Получаем параметры GMM
+        gmm_means = self.gmm.means_.flatten()
+        gmm_covariances = self.gmm.covariances_.flatten()
+        gmm_weights = self.gmm.weights_
+        gmm_stds = np.sqrt(gmm_covariances)
+        
+        # Преобразуем в спектральную шкалу для интерпретации
+        gmm_spectrum_positions = []
+        for mean in gmm_means:
+            pos = (mean - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+            pos = np.clip(pos, 0.0, 1.0)
+            gmm_spectrum_positions.append(pos)
+        
+        # Сортируем компоненты по позиции на спектральной шкале
+        sorted_indices = np.argsort(gmm_spectrum_positions)
+        
+        # Создаем сетку для построения
+        x_min, x_max = pc1_values.min(), pc1_values.max()
+        x_range = x_max - x_min
+        x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+        
+        # Создаем график
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # Цвета для компонентов
+        component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
+        
+        # Рисуем каждый компонент отдельно
+        for idx in sorted_indices:
+            mean = gmm_means[idx]
+            std = gmm_stds[idx]
+            weight = gmm_weights[idx]
+            spectrum_pos = gmm_spectrum_positions[idx]
+            color = component_colors[idx]
+            
+            # Вычисляем плотность отдельного гауссиана
+            gaussian_density = weight * stats.norm.pdf(x_grid, mean, std)
+            
+            # Определяем состояние
+            if spectrum_pos < 0.2:
+                state = "normal"
+            elif spectrum_pos < 0.5:
+                state = "mild"
+            elif spectrum_pos < 0.8:
+                state = "moderate"
+            else:
+                state = "severe"
+            
+            # Рисуем кривую компонента
+            ax.plot(x_grid, gaussian_density, 
+                   linewidth=2.5, alpha=0.8, color=color,
+                   label=f"Компонент {idx+1} ({state}): μ={mean:.2f}, σ={std:.2f}, w={weight:.3f}")
+            
+            # Отмечаем центр (пик)
+            peak_height = gaussian_density.max()
+            ax.scatter([mean], [peak_height], 
+                      color=color, s=200, marker='o', 
+                      edgecolors='black', linewidths=2, zorder=10)
+            
+            # Вертикальная линия на центре
+            ax.axvline(mean, color=color, linestyle='--', 
+                      linewidth=2, alpha=0.5, zorder=5)
+            
+            # Подпись центра
+            ax.text(mean, peak_height * 1.1, 
+                  f"μ={mean:.2f}\n{state}\nw={weight:.3f}",
+                  ha='center', va='bottom', fontsize=9,
+                  bbox=dict(boxstyle='round,pad=0.3', 
+                           facecolor=color, alpha=0.3))
+        
+        # Общая смесь GMM для сравнения
+        gmm_density_total = np.exp(self.gmm.score_samples(x_grid.reshape(-1, 1)))
+        ax.plot(x_grid, gmm_density_total, 
+               'k-', linewidth=3, alpha=0.5, 
+               label='Общая смесь GMM', zorder=1)
+        
+        ax.set_xlabel("PC1 (сырые значения, не нормализованные)", fontsize=12)
+        ax.set_ylabel("Плотность", fontsize=12)
+        ax.set_title("GMM компоненты - Чистые медицинские состояния", fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        
+        # Добавляем вторую ось X для спектральной шкалы (для интерпретации)
+        # ВАЖНО: Гауссианы строятся на НЕ нормализованной шкале PC1 (нижняя ось)
+        # Верхняя ось показывает нормализованную шкалу 0-1 только для интерпретации
+        ax2_spectrum = ax.twiny()
+        spectrum_ticks = [0.0, 0.2, 0.5, 0.8, 1.0]
+        spectrum_pc1_values = [self.pc1_p1 + t * (self.pc1_p99 - self.pc1_p1) 
+                              for t in spectrum_ticks]
+        ax2_spectrum.set_xlim(ax.get_xlim())
+        ax2_spectrum.set_xticks(spectrum_pc1_values)
+        ax2_spectrum.set_xticklabels([f"{t:.1f}" for t in spectrum_ticks])
+        ax2_spectrum.set_xlabel("Спектральная шкала (0-1, для интерпретации)", fontsize=11, color='gray')
+        ax2_spectrum.tick_params(colors='gray')
+        
+        plt.tight_layout()
+
+        if return_figure:
+            return fig
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+            plt.close()
+        else:
+            plt.show()
+
+    def visualize_spectrum_comparison(
+        self,
+        df: pd.DataFrame,
+        pc1_column: str = "PC1",
+        label_column: Optional[str] = None,
+        save_path: Optional[Union[str, Path]] = None,
+        return_figure: bool = False,
+    ):
+        """
+        Создает 4 графика: сравнение спектра и GMM компонентов на нормализованной и не нормализованной шкалах.
+        
+        Верхний ряд (не нормализованные, сырые PC1):
+        1. Спектр (KDE + GMM)
+        2. GMM компоненты
+        
+        Нижний ряд (нормализованные, спектральная шкала 0-1):
+        3. Спектр (KDE + GMM)
+        4. GMM компоненты
+        
+        Args:
+            df: DataFrame с колонкой PC1
+            pc1_column: Имя колонки с PC1 значениями
+            label_column: Опциональная колонка с метками для группировки
+            save_path: Путь для сохранения графика
+            return_figure: Если True, возвращает matplotlib figure
+        
+        Returns:
+            Если return_figure=True, возвращает matplotlib.figure.Figure, иначе None.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            raise ImportError(
+                "matplotlib требуется для визуализации. Установите: pip install matplotlib"
+            ) from e
+
+        if pc1_column not in df.columns:
+            raise ValueError(f"Колонка {pc1_column} не найдена в DataFrame")
+
+        if self.pc1_p1 is None or self.pc1_p99 is None:
+            raise ValueError("Спектр не обучен. Вызовите fit_spectrum() сначала.")
+
+        pc1_values = df[pc1_column].dropna().values
+        
+        # Преобразуем в спектральную шкалу
+        pc1_spectrum = (pc1_values - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+        pc1_spectrum = np.clip(pc1_spectrum, 0.0, 1.0)
+        
+        # Параметры нормализации
+        scale_factor = self.pc1_p99 - self.pc1_p1  # Для масштабирования плотности
+        
+        # Создаем фигуру с 4 подграфиками
+        fig = plt.figure(figsize=(18, 14))
+        gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.3, top=0.95, bottom=0.05)
+        
+        # ========== ВЕРХНИЙ РЯД: НЕ НОРМАЛИЗОВАННЫЕ (СЫРЫЕ PC1) ==========
+        
+        # График 1: Спектр на сырой шкале
+        ax1 = fig.add_subplot(gs[0, 0])
+        self._plot_spectrum_raw(ax1, pc1_values, label_column, df)
+        
+        # График 2: GMM компоненты на сырой шкале
+        ax2 = fig.add_subplot(gs[0, 1])
+        if self.gmm is not None:
+            self._plot_gmm_components_raw(ax2, pc1_values)
+        else:
+            ax2.text(0.5, 0.5, "GMM не обучен", ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title("GMM компоненты (сырые PC1)", fontsize=12, fontweight='bold')
+        
+        # ========== НИЖНИЙ РЯД: НОРМАЛИЗОВАННЫЕ (СПЕКТРАЛЬНАЯ ШКАЛА 0-1) ==========
+        
+        # График 3: Спектр на нормализованной шкале
+        ax3 = fig.add_subplot(gs[1, 0])
+        self._plot_spectrum_normalized(ax3, pc1_spectrum, label_column, df, scale_factor)
+        
+        # График 4: GMM компоненты на нормализованной шкале
+        ax4 = fig.add_subplot(gs[1, 1])
+        if self.gmm is not None:
+            self._plot_gmm_components_normalized(ax4, pc1_spectrum, scale_factor)
+        else:
+            ax4.text(0.5, 0.5, "GMM не обучен", ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title("GMM компоненты (спектральная шкала 0-1)", fontsize=12, fontweight='bold')
+        
+        if return_figure:
+            return fig
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+            plt.close()
+        else:
+            plt.show()
+
+    def _plot_spectrum_raw(self, ax, pc1_values, label_column, df):
+        """Строит спектр на сырой шкале PC1."""
+        from scipy import stats
+        
+        # KDE
+        if len(pc1_values) > 1:
+            kde = stats.gaussian_kde(pc1_values)
+            x_min, x_max = pc1_values.min(), pc1_values.max()
+            x_range = x_max - x_min
+            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+            density = kde(x_grid)
+            
+            ax.plot(x_grid, density, 'b-', linewidth=2, label='KDE', alpha=0.8)
+            
+            # GMM
+            if self.gmm is not None:
+                gmm_density = np.exp(self.gmm.score_samples(x_grid.reshape(-1, 1)))
+                if gmm_density.max() > 0 and density.max() > 0:
+                    scale_factor = density.max() / gmm_density.max()
+                    gmm_density_normalized = gmm_density * scale_factor
+                else:
+                    gmm_density_normalized = gmm_density
+                ax.plot(x_grid, gmm_density_normalized, 'm-', linewidth=2, alpha=0.8, 
+                       label=f'GMM смесь ({self.gmm.n_components} компонентов)')
+        
+        ax.hist(pc1_values, bins=30, alpha=0.5, density=True, label="Histogram", color='gray')
+        ax.set_xlabel("PC1 (сырые значения)", fontsize=11)
+        ax.set_ylabel("Плотность", fontsize=11)
+        ax.set_title("Спектр распределения (сырые PC1)", fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    def _plot_gmm_components_raw(self, ax, pc1_values):
+        """Строит GMM компоненты на сырой шкале PC1."""
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            pass
+        gmm_means = self.gmm.means_.flatten()
+        gmm_covariances = self.gmm.covariances_.flatten()
+        gmm_weights = self.gmm.weights_
+        gmm_stds = np.sqrt(gmm_covariances)
+        
+        # Преобразуем в спектральную шкалу для классификации
+        gmm_spectrum_positions = []
+        for mean in gmm_means:
+            pos = (mean - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+            pos = np.clip(pos, 0.0, 1.0)
+            gmm_spectrum_positions.append(pos)
+        
+        sorted_indices = np.argsort(gmm_spectrum_positions)
+        
+        x_min, x_max = pc1_values.min(), pc1_values.max()
+        x_range = x_max - x_min
+        x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+        
+        component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
+        
+        for idx in sorted_indices:
+            mean = gmm_means[idx]
+            std = gmm_stds[idx]
+            weight = gmm_weights[idx]
+            spectrum_pos = gmm_spectrum_positions[idx]
+            color = component_colors[idx]
+            
+            gaussian_density = weight * stats.norm.pdf(x_grid, mean, std)
+            
+            if spectrum_pos < 0.2:
+                state = "normal"
+            elif spectrum_pos < 0.5:
+                state = "mild"
+            elif spectrum_pos < 0.8:
+                state = "moderate"
+            else:
+                state = "severe"
+            
+            ax.plot(x_grid, gaussian_density, linewidth=2, alpha=0.7, color=color,
+                   label=f"{state}: μ={mean:.2f}, σ={std:.2f}")
+            ax.axvline(mean, color=color, linestyle='--', linewidth=1.5, alpha=0.5)
+            peak_height = gaussian_density.max()
+            ax.scatter([mean], [peak_height], color=color, s=100, marker='o', 
+                      edgecolors='black', linewidths=1, zorder=10)
+        
+        gmm_density_total = np.exp(self.gmm.score_samples(x_grid.reshape(-1, 1)))
+        ax.plot(x_grid, gmm_density_total, 'k-', linewidth=2, alpha=0.4, 
+               label='Общая смесь', zorder=1)
+        
+        ax.set_xlabel("PC1 (сырые значения)", fontsize=11)
+        ax.set_ylabel("Плотность", fontsize=11)
+        ax.set_title("GMM компоненты (сырые PC1)", fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    def _plot_spectrum_normalized(self, ax, pc1_spectrum, label_column, df, scale_factor):
+        """Строит спектр на нормализованной шкале 0-1."""
+        
+        if len(pc1_spectrum) > 1:
+            kde = stats.gaussian_kde(pc1_spectrum)
+            x_grid = np.linspace(0, 1, num=1000)
+            density = kde(x_grid)
+            # Масштабируем плотность обратно пропорционально масштабу оси X
+            density_scaled = density * scale_factor
+            
+            ax.plot(x_grid, density_scaled, 'b-', linewidth=2, label='KDE', alpha=0.8)
+            
+            # GMM на нормализованной шкале
+            if self.gmm is not None:
+                # Преобразуем сетку обратно в сырую шкалу для GMM
+                x_grid_raw = self.pc1_p1 + x_grid * (self.pc1_p99 - self.pc1_p1)
+                gmm_density_raw = np.exp(self.gmm.score_samples(x_grid_raw.reshape(-1, 1)))
+                # Масштабируем плотность
+                gmm_density_norm = gmm_density_raw * scale_factor
+                
+                if gmm_density_norm.max() > 0 and density_scaled.max() > 0:
+                    scale = density_scaled.max() / gmm_density_norm.max()
+                    gmm_density_norm_scaled = gmm_density_norm * scale
+                else:
+                    gmm_density_norm_scaled = gmm_density_norm
+                    
+                ax.plot(x_grid, gmm_density_norm_scaled, 'm-', linewidth=2, alpha=0.8,
+                       label=f'GMM смесь ({self.gmm.n_components} компонентов)')
+        
+        ax.hist(pc1_spectrum, bins=30, alpha=0.5, density=True, label="Histogram", color='gray')
+        # Масштабируем гистограмму
+        counts, bins, patches = ax.hist(pc1_spectrum, bins=30, alpha=0.3, density=False, color='lightgray')
+        # Преобразуем counts в density с учетом масштабирования
+        bin_width = bins[1] - bins[0]
+        density_hist = counts / (len(pc1_spectrum) * bin_width) * scale_factor
+        ax.bar(bins[:-1], density_hist, width=bin_width, alpha=0.5, color='gray', label="Histogram")
+        
+        ax.set_xlabel("Спектральная шкала (0-1)", fontsize=11)
+        ax.set_ylabel("Плотность (масштабированная)", fontsize=11)
+        ax.set_title("Спектр распределения (нормализованная шкала 0-1)", fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, 1)
+
+    def _plot_gmm_components_normalized(self, ax, pc1_spectrum, scale_factor):
+        """Строит GMM компоненты на нормализованной шкале 0-1."""
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            pass
+        gmm_means = self.gmm.means_.flatten()
+        gmm_covariances = self.gmm.covariances_.flatten()
+        gmm_weights = self.gmm.weights_
+        gmm_stds = np.sqrt(gmm_covariances)
+        
+        # Преобразуем параметры на нормализованную шкалу
+        gmm_means_norm = []
+        gmm_stds_norm = []
+        gmm_spectrum_positions = []
+        
+        for mean, std in zip(gmm_means, gmm_stds):
+            mean_norm = (mean - self.pc1_p1) / (self.pc1_p99 - self.pc1_p1)
+            std_norm = std / (self.pc1_p99 - self.pc1_p1)
+            mean_norm = np.clip(mean_norm, 0.0, 1.0)
+            gmm_means_norm.append(mean_norm)
+            gmm_stds_norm.append(std_norm)
+            gmm_spectrum_positions.append(mean_norm)
+        
+        sorted_indices = np.argsort(gmm_spectrum_positions)
+        
+        x_grid = np.linspace(0, 1, num=1000)
+        component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
+        
+        for idx in sorted_indices:
+            mean_norm = gmm_means_norm[idx]
+            std_norm = gmm_stds_norm[idx]
+            weight = gmm_weights[idx]
+            color = component_colors[idx]
+            
+            # Вычисляем плотность на нормализованной шкале
+            gaussian_density_norm = weight * stats.norm.pdf(x_grid, mean_norm, std_norm)
+            # Масштабируем плотность обратно пропорционально масштабу оси X
+            gaussian_density_scaled = gaussian_density_norm * scale_factor
+            
+            if mean_norm < 0.2:
+                state = "normal"
+            elif mean_norm < 0.5:
+                state = "mild"
+            elif mean_norm < 0.8:
+                state = "moderate"
+            else:
+                state = "severe"
+            
+            ax.plot(x_grid, gaussian_density_scaled, linewidth=2, alpha=0.7, color=color,
+                   label=f"{state}: μ={mean_norm:.3f}, σ={std_norm:.3f}")
+            ax.axvline(mean_norm, color=color, linestyle='--', linewidth=1.5, alpha=0.5)
+            peak_height = gaussian_density_scaled.max()
+            ax.scatter([mean_norm], [peak_height], color=color, s=100, marker='o',
+                      edgecolors='black', linewidths=1, zorder=10)
+        
+        # Общая смесь на нормализованной шкале
+        x_grid_raw = self.pc1_p1 + x_grid * (self.pc1_p99 - self.pc1_p1)
+        gmm_density_total_raw = np.exp(self.gmm.score_samples(x_grid_raw.reshape(-1, 1)))
+        gmm_density_total_norm = gmm_density_total_raw * scale_factor
+        ax.plot(x_grid, gmm_density_total_norm, 'k-', linewidth=2, alpha=0.4,
+               label='Общая смесь', zorder=1)
+        
+        ax.set_xlabel("Спектральная шкала (0-1)", fontsize=11)
+        ax.set_ylabel("Плотность (масштабированная)", fontsize=11)
+        ax.set_title("GMM компоненты (нормализованная шкала 0-1)", fontsize=12, fontweight='bold')
+        ax.legend(loc='best', fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, 1)
+
     def visualize_spectrum(
         self,
         df: pd.DataFrame,
@@ -443,15 +1142,14 @@ class SpectralAnalyzer:
                 # Вычисляем общую плотность GMM для каждой точки
                 gmm_density = np.exp(self.gmm.score_samples(x_grid.reshape(-1, 1)))
                 
-                # Нормализуем для визуализации (масштабируем к KDE)
-                # Используем интеграл для правильного масштабирования
-                kde_integral = np.trapz(density, x_grid)
-                gmm_integral = np.trapz(gmm_density, x_grid)
-                if gmm_integral > 0:
-                    scale_factor = kde_integral / gmm_integral
+                # Улучшенное масштабирование: используем максимум вместо интеграла
+                # Это более стабильно для визуализации
+                if gmm_density.max() > 0 and density.max() > 0:
+                    # Масштабируем так, чтобы максимумы совпадали
+                    scale_factor = density.max() / gmm_density.max()
                     gmm_density_normalized = gmm_density * scale_factor
                 else:
-                    gmm_density_normalized = gmm_density * (density.max() / gmm_density.max()) if gmm_density.max() > 0 else gmm_density
+                    gmm_density_normalized = gmm_density
                 
                 # Вычисляем качество аппроксимации
                 pc1_values_reshaped = pc1_values.reshape(-1, 1)
@@ -464,50 +1162,9 @@ class SpectralAnalyzer:
                 rmse = np.sqrt(np.mean((kde_on_grid - gmm_density_normalized)**2))
                 max_error = np.max(np.abs(kde_on_grid - gmm_density_normalized))
                 
-                # Общая смесь GMM
-                ax1.plot(x_grid, gmm_density_normalized, "m-", linewidth=3, alpha=0.9, 
+                # Общая смесь GMM (только общая кривая, без отдельных компонентов)
+                ax1.plot(x_grid, gmm_density_normalized, "m-", linewidth=2, alpha=0.8, 
                         label=f"GMM смесь ({self.gmm.n_components} компонентов, RMSE={rmse:.4f})", zorder=4)
-                
-                # Визуализация отдельных компонентов GMM
-                gmm_means = self.gmm.means_.flatten()
-                gmm_covariances = self.gmm.covariances_.flatten()
-                gmm_weights = self.gmm.weights_
-                
-                # Сортируем компоненты по весу (от большего к меньшему) для лучшей визуализации
-                sorted_indices = np.argsort(gmm_weights)[::-1]
-                
-                # Цвета для разных компонентов
-                component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
-                
-                for idx, i in enumerate(sorted_indices):
-                    mean = gmm_means[i]
-                    cov = gmm_covariances[i]
-                    weight = gmm_weights[i]
-                    color = component_colors[i]
-                    
-                    # Вычисляем плотность отдельного гауссиана
-                    std = np.sqrt(cov)
-                    gaussian_density = weight * stats.norm.pdf(x_grid, mean, std)
-                    # Масштабируем так же, как общую смесь
-                    if gmm_integral > 0:
-                        gaussian_density_scaled = gaussian_density * scale_factor
-                    else:
-                        gaussian_density_scaled = gaussian_density * (density.max() / gmm_density.max()) if gmm_density.max() > 0 else gaussian_density
-                    
-                    # Рисуем отдельный компонент (только если вес значимый)
-                    if weight > 0.01:  # Показываем только компоненты с весом > 1%
-                        ax1.plot(x_grid, gaussian_density_scaled, "--", linewidth=1.5, alpha=0.5, 
-                                color=color, label=f"Компонент {i+1} (μ={mean:.2f}, σ={std:.2f}, w={weight:.2f})")
-                    
-                    # Отмечаем центр компонента вертикальной линией на оси X (не на уровне плотности!)
-                    # Высота = вес компонента, масштабированный к максимуму плотности
-                    center_height = weight * density.max() * 0.1  # 10% от максимума для видимости
-                    ax1.axvline(mean, color=color, linestyle=':', linewidth=2, alpha=0.7, 
-                               label=f"μ{i+1}={mean:.2f}" if idx == 0 else "")
-                    
-                    # Небольшой маркер на оси X для центра
-                    ax1.scatter([mean], [0], color=color, s=80, marker='|', linewidths=3, 
-                              zorder=7, label="")
                 
                 # Добавляем информацию о качестве в заголовок или текст
                 quality_text = f"GMM: LL={log_likelihood:.1f}, BIC={bic:.1f}, RMSE={rmse:.4f}"
@@ -585,7 +1242,35 @@ class SpectralAnalyzer:
             ax2.legend()
         ax2.grid(True, alpha=0.3)
 
-        plt.tight_layout()
+        # Добавляем краткие комментарии ниже графиков
+        gmm_method_text = ""
+        if self.gmm is not None:
+            gmm_method_text = (
+                f"GMM обучен с {self.gmm.n_components} компонентами через EM-алгоритм. "
+                f"Число компонентов выбрано автоматически по BIC критерию. "
+            )
+        
+        comment_text = (
+            "📊 KDE (синяя линия): непараметрическая оценка плотности распределения PC1. "
+            "Показывает реальную форму распределения без предположений о модели. "
+            "Пики = области с высокой концентрацией образцов.\n\n"
+            "🔴 Mode (красные пунктирные линии): стабильные состояния (локальные максимумы плотности). "
+            "Каждая мода = группа образцов с похожими характеристиками. "
+            "Моды помогают выявить основные патологические состояния.\n\n"
+            "🟣 GMM (фиолетовая линия): параметрическая модель смеси гауссовых распределений. "
+            f"{gmm_method_text}"
+            "Аппроксимирует распределение через несколько компонентов (состояний). "
+            "Центры компонентов отмечены вертикальными линиями. "
+            "RMSE показывает качество аппроксимации KDE. "
+            "Подробнее о методах см. раздел 'Спектральный анализ'."
+        )
+        
+        fig.text(0.5, 0.01, comment_text,
+                ha='center', va='bottom', fontsize=8.5, 
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.3),
+                family='monospace')
+
+        plt.tight_layout(rect=[0, 0.12, 1, 1])  # Оставляем место внизу для текста
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches="tight")

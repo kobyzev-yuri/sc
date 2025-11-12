@@ -13,6 +13,14 @@ class WSIIterator(Protocol):
     def iter_first_section_bgr(
         self, window_size: int, overlap_ratio: float
     ) -> Iterator[tuple[np.ndarray, domain.Coords]]: ...
+    
+    def iter_section_bgr(
+        self, index: int, window_size: int, overlap_ratio: float
+    ) -> Iterator[tuple[np.ndarray, domain.Coords]]: ...
+    
+    def iter_subsection_bgr(
+        self, section_index: int, subsection_index: int, window_size: int, overlap_ratio: float
+    ) -> Iterator[tuple[np.ndarray, domain.Coords]]: ...
 
 
 class Model(Protocol):
@@ -47,7 +55,16 @@ class WSIPredictor:
         self.postprocess_settings = postprocess_settings
 
     def predict_first_section(self) -> dict[str, list[domain.Prediction]]:
-        preds_all = self._predict_first_section()
+        return self.predict_section(0)
+
+    def predict_section(self, section_index: int) -> dict[str, list[domain.Prediction]]:
+        preds_all = self._predict_section(section_index)
+        return self._postprocess(preds_all)
+
+    def predict_subsection(
+        self, section_index: int, subsection_index: int
+    ) -> dict[str, list[domain.Prediction]]:
+        preds_all = self._predict_subsection(section_index, subsection_index)
         return self._postprocess(preds_all)
 
     def _postprocess(
@@ -59,12 +76,41 @@ class WSIPredictor:
 
         return result
 
-    def _predict_first_section(self) -> dict[str, list[domain.Prediction]]:
+    def _predict_section(self, sec_index: int) -> dict[str, list[domain.Prediction]]:
         size_to_models = self._group_models_by_window_size()
         predictions = defaultdict(list[domain.Prediction])
 
         for window_size, models in size_to_models.items():
-            for region, start in self.iterator.iter_first_section_bgr(
+            for region, start in self.iterator.iter_section_bgr(
+                index=sec_index,
+                window_size=window_size,
+                overlap_ratio=self.overlap_ratio,
+            ):
+                for model in models:
+                    window_preds = model.predict([region])
+
+                    for cls_name, preds in window_preds.items():
+                        for p in preds:
+                            predictions[cls_name].append(
+                                domain.Prediction(
+                                    box=self._to_absolute_box(start, p.box),
+                                    polygon=self._to_absolute_polygon(start, p.polygon),
+                                    conf=p.conf,
+                                )
+                            )
+
+        return predictions
+
+    def _predict_subsection(
+        self, section_index: int, subsection_index: int
+    ) -> dict[str, list[domain.Prediction]]:
+        size_to_models = self._group_models_by_window_size()
+        predictions = defaultdict(list[domain.Prediction])
+
+        for window_size, models in size_to_models.items():
+            for region, start in self.iterator.iter_subsection_bgr(
+                section_index=section_index,
+                subsection_index=subsection_index,
                 window_size=window_size,
                 overlap_ratio=self.overlap_ratio,
             ):

@@ -2,12 +2,38 @@
 
 ## Запуск
 
+### Локальный запуск:
+
 ```bash
 cd /mnt/ai/cnn/sc
 streamlit run scale/dashboard.py
 ```
 
 Дашборд откроется в браузере по адресу `http://localhost:8501`
+
+### Запуск для внешнего доступа (демонстрация):
+
+**Вариант 1: Автоматический скрипт (рекомендуется):**
+```bash
+cd /mnt/ai/cnn/sc
+./start_dashboard.sh
+```
+
+Скрипт автоматически:
+- Запустит Streamlit dashboard
+- Запустит ngrok туннель
+- Покажет публичный URL для доступа
+
+**Вариант 2: Вручную:**
+```bash
+# Терминал 1: Запустите dashboard
+streamlit run scale/dashboard.py --server.port 8501 --server.address 0.0.0.0
+
+# Терминал 2: Запустите ngrok
+ngrok http 8501
+```
+
+Подробнее см. [DEPLOYMENT.md](../DEPLOYMENT.md)
 
 ## Возможности
 

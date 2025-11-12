@@ -114,7 +114,11 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
 
             count_col = col.replace("area", "count")
             if count_col in df.columns:
-                # Формула из ноутбука: relative_area / count
+                # Mean Relative Area = средняя относительная площадь на один объект
+                # Формула: mean_relative_area = relative_area / count
+                # Где: relative_area = area / Crypts_area
+                # Итоговая формула: mean_relative_area = (area / Crypts_area) / count = area / (count * Crypts_area)
+                # Это средний размер одного объекта типа X относительно размера крипты
                 # Заменяем 0 на NaN, чтобы избежать деления на 0
                 count_values = df[count_col].replace(0, np.nan)
                 df_new[col.replace("area", "mean_relative_area")] = (
@@ -134,37 +138,55 @@ def select_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame с отобранными колонками
     """
+    # Формируем список признаков парами: relative_count, relative_area, mean_relative_area
+    # ВАЖНО: Полный набор признаков для каждого патологического класса улучшает качество GMM аппроксимации
+    # Исключаем структурные элементы без count (Surface epithelium, Muscularis mucosae)
     cols = [
         "image",
+        # Mild: count, area, mean_area
         "Mild_relative_count",
-        "Dysplasia_relative_count",
-        "Moderate_relative_count",
-        "Meta_relative_count",
-        "Plasma Cells_relative_count",
-        "Neutrophils_relative_count",
-        "EoE_relative_count",
-        "Enterocytes_relative_count",
-        "Granulomas_relative_count",
-        "Paneth_relative_count",
         "Mild_relative_area",
         "Mild_mean_relative_area",
-        "Surface epithelium_relative_area",
+        # Dysplasia: count, area, mean_area
+        "Dysplasia_relative_count",
         "Dysplasia_relative_area",
         "Dysplasia_mean_relative_area",
+        # Moderate: count, area, mean_area
+        "Moderate_relative_count",
         "Moderate_relative_area",
         "Moderate_mean_relative_area",
-        "Muscularis mucosae_relative_area",
+        # Meta: count, area, mean_area
+        "Meta_relative_count",
         "Meta_relative_area",
         "Meta_mean_relative_area",
+        # Plasma Cells: count, area, mean_area
+        "Plasma Cells_relative_count",
         "Plasma Cells_relative_area",
         "Plasma Cells_mean_relative_area",
+        # Neutrophils: count, area, mean_area
+        "Neutrophils_relative_count",
         "Neutrophils_relative_area",
         "Neutrophils_mean_relative_area",
+        # EoE: count, area, mean_area (ВАЖНО: патологический признак)
+        "EoE_relative_count",
+        "EoE_relative_area",
+        "EoE_mean_relative_area",
+        # Enterocytes: count, area, mean_area
+        "Enterocytes_relative_count",
         "Enterocytes_relative_area",
         "Enterocytes_mean_relative_area",
+        # Granulomas: count, area, mean_area (ВАЖНО: патологический признак)
+        "Granulomas_relative_count",
         "Granulomas_relative_area",
+        "Granulomas_mean_relative_area",
+        # Paneth: count, area, mean_area
+        "Paneth_relative_count",
         "Paneth_relative_area",
         "Paneth_mean_relative_area",
+        # Структурные элементы (только area, без count):
+        # Surface epithelium и Muscularis mucosae - это области, а не отдельные объекты
+        "Surface epithelium_relative_area",
+        "Muscularis mucosae_relative_area",
     ]
 
     available_cols = [col for col in cols if col in df.columns]
