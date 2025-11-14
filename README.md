@@ -278,7 +278,7 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
    - `PC1_mode_distance` - расстояние до ближайшей моды (для справки)
    - `PC1_nearest_mode` - метка ближайшей моды (для справки)
    
-   Подробнее см. [CLASSIFICATION_CRITERIA.md](CLASSIFICATION_CRITERIA.md)
+   Подробнее см. [docs/CLASSIFICATION_CRITERIA.md](docs/CLASSIFICATION_CRITERIA.md)
 
 **Вариант A: Anomaly Detection** (для сравнения)
 1. Модуль `anomaly_detection.py`:
@@ -298,12 +298,17 @@ image,Mild_count,Mild_area,Crypts_count,Crypts_area,...,Dysplasia_count,Dysplasi
 **Вариант C: Кластер → Score Mapping** ✅ (после кластеризации)
 1. Модуль `cluster_scoring.py`:
    - ✅ Маппинг кластеров на score (0.0 - 1.0)
-   - ✅ 4 метода маппинга:
-     - `pathology_features` - на основе патологических признаков (рекомендуется)
+   - ✅ 5 методов маппинга:
+     - `spectrum_projection` ⭐ - интегрированный подход со спектральным анализом (единая шкала, моды)
+     - `pathology_features` - на основе патологических признаков
      - `pc1_centroid` - на основе PC1 центроидов
      - `expert_labels` - на основе экспертной разметки
      - `distance_from_normal` - на основе расстояния от нормального кластера
    - ✅ Интеграция с результатами кластеризации
+   - ✅ Нормализация через процентили (P1/P99) для устойчивости к выбросам
+   - ✅ Учет распределений внутри кластеров (медиана, процентили)
+   - ✅ Классификация кластеров по модам из спектрального анализа
+   - ✅ Полная интеграция в веб-дашборд
    
    **Документация:** [docs/CLUSTER_SCORING.md](docs/CLUSTER_SCORING.md)
 
@@ -528,12 +533,14 @@ pip install streamlit  # для дашборда
 
 ## Документация
 
+- **[docs/FEATURES.md](docs/FEATURES.md)** - Подробное описание абсолютных и относительных признаков, их количества и формул
+- **[docs/PCA.md](docs/PCA.md)** - Подробное объяснение PCA: матрица ковариации, вычисление PC1 для WSI, важность признаков (loadings)
 - **[docs/CLUSTER_SCORING.md](docs/CLUSTER_SCORING.md)** - Подробное описание методов маппинга кластеров на шкалу 0-1
 - **[examples/README_DASHBOARD.md](examples/README_DASHBOARD.md)** - Руководство по использованию веб-дашборда
 - **[examples/README_TESTING.md](examples/README_TESTING.md)** - Примеры использования модулей
-- **[ANALYSIS.md](ANALYSIS.md)** - Анализ результатов и известные проблемы
-- **[CLASSIFICATION_CRITERIA.md](CLASSIFICATION_CRITERIA.md)** - Критерии классификации образцов (normal/mild/moderate/severe) и пороги на спектральной шкале
-- **[HOW_TO_RERUN_ANALYSIS.md](HOW_TO_RERUN_ANALYSIS.md)** - Как перезапустить анализ в веб-интерфейсе
+- **[docs/ANALYSIS.md](docs/ANALYSIS.md)** - Анализ результатов и известные проблемы
+- **[docs/CLASSIFICATION_CRITERIA.md](docs/CLASSIFICATION_CRITERIA.md)** - Критерии классификации образцов (normal/mild/moderate/severe) и пороги на спектральной шкале
+- **[docs/HOW_TO_RERUN_ANALYSIS.md](docs/HOW_TO_RERUN_ANALYSIS.md)** - Как перезапустить анализ в веб-интерфейсе
 
 ## Новые возможности
 

@@ -169,6 +169,10 @@ def render_dashboard():
             - ✅ Фокус на плотности/интенсивности патологии
             - ✅ Хорошо для выявления паттернов независимо от размера
             - 📊 Формула: `X_count / Crypts_count`, `X_area / Crypts_area`
+            - 📈 **Количество:** 30 признаков (10 классов × 3 типа признаков)
+              - `relative_count` - относительное количество
+              - `relative_area` - относительная площадь
+              - `mean_relative_area` - средняя относительная площадь на объект
             
             **Абсолютные значения:**
             - ✅ Сохраняют информацию о размере биоптата
@@ -176,11 +180,24 @@ def render_dashboard():
             - ✅ Полезны для оценки общей тяжести
             - ✅ Могут лучше работать при большом разбросе размеров
             - 📊 Формула: `X_count`, `X_area` (без нормализации)
+            - 📈 **Количество:** 22 признака (11 классов × 2 типа признаков)
+              - 10 классов патологий + 1 Crypts (нормализатор)
+              - `count` - абсолютное количество объектов
+              - `area` - абсолютная площадь
+              - Примечание: если в данных есть дополнительные классы (Surface epithelium, Muscularis mucosae и др.),
+                абсолютных признаков может быть больше (26-28)
+            
+            **Почему относительных признаков больше?**
+            - Для каждого класса создается 3 относительных признака вместо 2 абсолютных
+            - Добавлен `mean_relative_area` - средний размер объекта относительно крипты
+            - Исключены: Crypts (нормализатор), Surface epithelium, Muscularis mucosae (структурные элементы)
             
             **Рекомендация:**
             - Начать с относительных признаков (по умолчанию)
             - Попробовать абсолютные, если относительные не дают хорошего разделения
             - Можно сравнить оба подхода через "Сравнение методов"
+            
+            📖 Подробнее см. [docs/FEATURES.md](docs/FEATURES.md)
             """)
 
         use_relative_features = st.checkbox(
@@ -310,10 +327,10 @@ def render_dashboard():
             rows = []
 
             for image_name, preds in predictions.items():
-                stats = aggregate.aggregate_predictions_from_dict(
+                pred_stats = aggregate.aggregate_predictions_from_dict(
                     preds, image_name
                 )
-                rows.append(stats)
+                rows.append(pred_stats)
 
             df = pd.DataFrame(rows)
 
@@ -321,7 +338,18 @@ def render_dashboard():
                 df_features = aggregate.create_relative_features(df)
                 df_features = aggregate.select_feature_columns(df_features)
             else:
-                df_features = df
+                # Для абсолютных признаков используем только df, но убеждаемся, что нет относительных признаков
+                df_features = df.copy()
+                # Удаляем относительные признаки, если они случайно попали (из предыдущего анализа)
+                relative_cols = [col for col in df_features.columns if 'relative' in col.lower()]
+                if relative_cols:
+                    df_features = df_features.drop(columns=relative_cols)
+                # Удаляем White space, если он попал (служебный класс)
+                white_space_cols = [col for col in df_features.columns if 'white space' in col.lower()]
+                if white_space_cols:
+                    df_features = df_features.drop(columns=white_space_cols)
+                # Crypts остается в абсолютных признаках (он является признаком)
+                # Crypts исключается только из относительных признаков, так как используется как нормализатор
             
             # Исключение или выбор признаков (применяется автоматически)
             if "selection_mode" in st.session_state:
@@ -357,13 +385,14 @@ def render_dashboard():
         }
 
         # Вкладки для визуализации
-        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔗 Кластеризация", "⚖️ Сравнение кластеризаций", "🔬 Сравнение методов построения шкалы"]
+        # Упрощенная структура: кластеризация интегрирована в спектральный анализ
+        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔬 Сравнение методов построения шкалы"]
         if enable_comparison:
             tab_names.append("⚖️ Сравнение методов")
         
         tabs = st.tabs(tab_names)
-        tab1, tab_features, tab2, tab3, tab4, tab5, tab_clustering, tab_compare, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7], tabs[8]
-        tab_comparison = tabs[9] if enable_comparison else None
+        tab1, tab_features, tab2, tab3, tab4, tab5, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
+        tab_comparison = tabs[7] if enable_comparison else None
 
         with tab1:
             st.header("Загруженные данные")
@@ -422,9 +451,45 @@ def render_dashboard():
             st.markdown("Выберите, какие признаки использовать для построения шкалы патологии.")
             
             if len(df_features) > 0:
+                # Для абсолютных признаков Crypts остается в df_features (он является признаком)
+                # Crypts исключается только из относительных признаков, так как используется как нормализатор
+                
                 numeric_cols = df_features.select_dtypes(include=[np.number]).columns.tolist()
                 if "image" in numeric_cols:
                     numeric_cols.remove("image")
+                
+                # Фильтруем только признаки классов (исключаем служебные колонки)
+                # Служебные колонки: PC1, PC1_spectrum, PC1_mode и другие, которые могут быть добавлены в процессе анализа
+                service_columns = [
+                    'pc1', 'pc1_spectrum', 'pc1_mode', 'pc1_norm', 'pc1_mode_spectrum', 
+                    'pc1_mode_gmm', 'pc1_mode_combined', 'pc1_nearest_mode', 'pc1_mode_distance',
+                    'gmm_component', 'gmm_max_prob',
+                    'cluster', 'score', 'silhouette', 'calinski', 'davies'
+                ]
+                
+                # Определяем паттерны признаков классов
+                if use_relative_features:
+                    # Относительные признаки: должны заканчиваться на _relative_count, _relative_area, _mean_relative_area
+                    feature_patterns = ['_relative_count', '_relative_area', '_mean_relative_area']
+                    feature_cols = [
+                        col for col in numeric_cols 
+                        if any(col.endswith(pattern) for pattern in feature_patterns)
+                        and not any(service in col.lower() for service in service_columns)
+                    ]
+                else:
+                    # Абсолютные признаки: должны заканчиваться на _count или _area
+                    # Исключаем:
+                    # 1. Относительные признаки (если они случайно попали)
+                    # 2. Служебные колонки
+                    # Crypts ВКЛЮЧАЕТСЯ в абсолютные признаки (он является признаком)
+                    # Crypts исключается только из относительных признаков, так как используется как нормализатор
+                    feature_patterns = ['_count', '_area']
+                    feature_cols = [
+                        col for col in numeric_cols 
+                        if any(col.endswith(pattern) for pattern in feature_patterns)
+                        and not any(service in col.lower() for service in service_columns)
+                        and 'relative' not in col.lower()  # Исключаем относительные признаки
+                    ]
                 
                 # Режим выбора: исключить или использовать только выбранные
                 selection_mode = st.radio(
@@ -450,146 +515,191 @@ def render_dashboard():
                 excluded_features = None
                 included_features = None
                 
+                # Используем сохраненные значения из session_state для отображения
+                if "excluded_features" in st.session_state:
+                    excluded_features = st.session_state.excluded_features
+                if "included_features" in st.session_state:
+                    included_features = st.session_state.included_features
+                
                 if selection_mode == "Исключить признаки (blacklist)":
                     st.markdown("**Выберите признаки для исключения:**")
+                    st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
                     
-                    # Группируем признаки по категориям для удобства
-                    pathology_features = [f for f in numeric_cols if any(x in f.lower() for x in 
+                    # Группируем признаки по категориям для удобства (используем feature_cols вместо numeric_cols)
+                    pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
                         ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
-                    meta_features = [f for f in numeric_cols if 'meta' in f.lower()]
-                    immune_features = [f for f in numeric_cols if any(x in f.lower() for x in 
+                    meta_features = [f for f in feature_cols if 'meta' in f.lower()]
+                    immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
                         ['neutrophils', 'plasma', 'enterocytes'])]
-                    other_features = [f for f in numeric_cols if f not in pathology_features + meta_features + immune_features]
+                    # Исключаем структурные элементы, используемые только для разбора по слоям
+                    structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                        ['surface epithelium', 'muscularis mucosae'])]
+                    other_features = [f for f in feature_cols if f not in pathology_features + meta_features + immune_features + structural_features]
                     
-                    col1, col2 = st.columns(2)
+                    # Используем сохраненные значения для default
+                    # Фильтруем, чтобы значения были только из доступных опций
+                    default_excluded_pathology = [f for f in excluded_features if f in pathology_features] if excluded_features else []
+                    default_excluded_meta = [f for f in excluded_features if f in meta_features] if excluded_features else ([f for f in suggested if f in meta_features] if suggested else [])
+                    default_excluded_immune = [f for f in excluded_features if f in immune_features] if excluded_features else ([f for f in suggested if f in immune_features] if suggested else [])
+                    default_excluded_other = [f for f in excluded_features if f in other_features] if excluded_features else []
                     
-                    with col1:
-                        st.markdown("**Патологические признаки:**")
-                        pathology_selected = st.multiselect(
-                            "Исключить патологические",
-                            pathology_features,
-                            default=[],
-                            key="exclude_pathology",
-                            label_visibility="collapsed"
-                        )
+                    with st.form("feature_selection_blacklist_form", clear_on_submit=False):
+                        col1, col2 = st.columns(2)
                         
-                        st.markdown("**Метаплазия:**")
-                        meta_selected = st.multiselect(
-                            "Исключить Meta",
-                            meta_features,
-                            default=[f for f in suggested if f in meta_features],
-                            key="exclude_meta",
-                            label_visibility="collapsed"
-                        )
-                    
-                    with col2:
-                        st.markdown("**Иммунные клетки:**")
-                        immune_selected = st.multiselect(
-                            "Исключить иммунные",
-                            immune_features,
-                            default=[f for f in suggested if f in immune_features],
-                            key="exclude_immune",
-                            label_visibility="collapsed"
-                        )
+                        with col1:
+                            st.markdown("**Патологические признаки:**")
+                            pathology_selected = st.multiselect(
+                                "Исключить патологические",
+                                pathology_features,
+                                default=default_excluded_pathology,
+                                key="exclude_pathology_form",
+                                label_visibility="collapsed"
+                            )
+                            
+                            st.markdown("**Метаплазия:**")
+                            meta_selected = st.multiselect(
+                                "Исключить Meta",
+                                meta_features,
+                                default=default_excluded_meta,
+                                key="exclude_meta_form",
+                                label_visibility="collapsed"
+                            )
                         
-                        st.markdown("**Другие признаки:**")
-                        other_selected = st.multiselect(
-                            "Исключить другие",
-                            other_features,
-                            default=[],
-                            key="exclude_other",
-                            label_visibility="collapsed"
-                        )
+                        with col2:
+                            st.markdown("**Иммунные клетки:**")
+                            immune_selected = st.multiselect(
+                                "Исключить иммунные",
+                                immune_features,
+                                default=default_excluded_immune,
+                                key="exclude_immune_form",
+                                label_visibility="collapsed"
+                            )
+                            
+                            st.markdown("**Другие признаки:**")
+                            other_selected = st.multiselect(
+                                "Исключить другие",
+                                other_features,
+                                default=default_excluded_other,
+                                key="exclude_other_form",
+                                label_visibility="collapsed"
+                            )
+                        
+                        submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
+                        if submitted:
+                            excluded_features = pathology_selected + meta_selected + immune_selected + other_selected
+                            st.session_state.excluded_features = excluded_features
+                            st.session_state.included_features = []  # Очищаем whitelist при использовании blacklist
+                            st.rerun()
                     
-                    excluded_features = pathology_selected + meta_selected + immune_selected + other_selected
+                    # Используем сохраненные значения
+                    excluded_features = st.session_state.excluded_features if st.session_state.excluded_features else []
                     
                 elif selection_mode == "Использовать только выбранные (whitelist)":
                     st.markdown("**Выберите признаки для использования:**")
+                    st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
                     
-                    # Группируем признаки
-                    pathology_features = [f for f in numeric_cols if any(x in f.lower() for x in 
+                    # Группируем признаки (используем feature_cols вместо numeric_cols)
+                    pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
                         ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
-                    meta_features = [f for f in numeric_cols if 'meta' in f.lower()]
-                    immune_features = [f for f in numeric_cols if any(x in f.lower() for x in 
+                    meta_features = [f for f in feature_cols if 'meta' in f.lower()]
+                    immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
                         ['neutrophils', 'plasma', 'enterocytes'])]
-                    other_features = [f for f in numeric_cols if f not in pathology_features + meta_features + immune_features]
+                    # Исключаем структурные элементы, используемые только для разбора по слоям
+                    structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                        ['surface epithelium', 'muscularis mucosae'])]
+                    other_features = [f for f in feature_cols if f not in pathology_features + meta_features + immune_features + structural_features]
                     
-                    # Быстрый выбор: кнопки для предустановок
+                    # Быстрый выбор: кнопки для предустановок (вне формы, чтобы работали сразу)
                     st.markdown("**Быстрый выбор (нажмите кнопку для автоматического выбора):**")
                     preset_cols = st.columns(4)
                     
                     with preset_cols[0]:
                         if st.button("Только патология", use_container_width=True, key="preset_pathology"):
                             st.session_state.included_features = pathology_features
+                            st.session_state.excluded_features = []  # Очищаем blacklist
                             st.rerun()
                     
                     with preset_cols[1]:
                         if st.button("Патология + Иммунные", use_container_width=True, key="preset_path_immune"):
                             st.session_state.included_features = pathology_features + immune_features
+                            st.session_state.excluded_features = []
                             st.rerun()
                     
                     with preset_cols[2]:
                         if st.button("Все кроме Meta", use_container_width=True, key="preset_no_meta"):
-                            st.session_state.included_features = [f for f in numeric_cols if f not in meta_features]
+                            st.session_state.included_features = [f for f in feature_cols if f not in meta_features]
+                            st.session_state.excluded_features = []
                             st.rerun()
                     
                     with preset_cols[3]:
                         if st.button("Очистить", use_container_width=True, key="preset_clear"):
                             st.session_state.included_features = []
+                            st.session_state.excluded_features = []
                             st.rerun()
                     
                     # Используем сохраненные значения или патологические по умолчанию
+                    # Фильтруем сохраненные значения, чтобы они были только из доступных опций
                     if st.session_state.included_features:
-                        default_whitelist = st.session_state.included_features
+                        saved_included = st.session_state.included_features
+                        default_whitelist = [f for f in saved_included if f in numeric_cols]
+                        if not default_whitelist:
+                            default_whitelist = pathology_features
                     else:
                         default_whitelist = pathology_features
                     
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.markdown("**Патологические признаки:**")
-                        pathology_selected = st.multiselect(
-                            "Выбрать патологические",
-                            pathology_features,
-                            default=[f for f in default_whitelist if f in pathology_features],
-                            key="include_pathology",
-                            label_visibility="collapsed"
-                        )
+                    with st.form("feature_selection_whitelist_form", clear_on_submit=False):
+                        col1, col2 = st.columns(2)
                         
-                        st.markdown("**Метаплазия:**")
-                        meta_selected = st.multiselect(
-                            "Выбрать Meta",
-                            meta_features,
-                            default=[f for f in default_whitelist if f in meta_features],
-                            key="include_meta",
-                            label_visibility="collapsed"
-                        )
-                    
-                    with col2:
-                        st.markdown("**Иммунные клетки:**")
-                        immune_selected = st.multiselect(
-                            "Выбрать иммунные",
-                            immune_features,
-                            default=[f for f in default_whitelist if f in immune_features],
-                            key="include_immune",
-                            label_visibility="collapsed"
-                        )
+                        with col1:
+                            st.markdown("**Патологические признаки:**")
+                            pathology_selected = st.multiselect(
+                                "Выбрать патологические",
+                                pathology_features,
+                                default=[f for f in default_whitelist if f in pathology_features],
+                                key="include_pathology_form",
+                                label_visibility="collapsed"
+                            )
+                            
+                            st.markdown("**Метаплазия:**")
+                            meta_selected = st.multiselect(
+                                "Выбрать Meta",
+                                meta_features,
+                                default=[f for f in default_whitelist if f in meta_features],
+                                key="include_meta_form",
+                                label_visibility="collapsed"
+                            )
                         
-                        st.markdown("**Другие признаки:**")
-                        other_selected = st.multiselect(
-                            "Выбрать другие",
-                            other_features,
-                            default=[f for f in default_whitelist if f in other_features],
-                            key="include_other",
-                            label_visibility="collapsed"
-                        )
+                        with col2:
+                            st.markdown("**Иммунные клетки:**")
+                            immune_selected = st.multiselect(
+                                "Выбрать иммунные",
+                                immune_features,
+                                default=[f for f in default_whitelist if f in immune_features],
+                                key="include_immune_form",
+                                label_visibility="collapsed"
+                            )
+                            
+                            st.markdown("**Другие признаки:**")
+                            other_selected = st.multiselect(
+                                "Выбрать другие",
+                                other_features,
+                                default=[f for f in default_whitelist if f in other_features],
+                                key="include_other_form",
+                                label_visibility="collapsed"
+                            )
+                        
+                        submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
+                        if submitted:
+                            included_features = pathology_selected + meta_selected + immune_selected + other_selected
+                            st.session_state.included_features = included_features
+                            st.session_state.excluded_features = []  # Очищаем blacklist при использовании whitelist
+                            st.rerun()
                     
-                    included_features = pathology_selected + meta_selected + immune_selected + other_selected
+                    # Используем сохраненные значения
+                    included_features = st.session_state.included_features if st.session_state.included_features else []
                 
-                # Сохраняем в session state
+                # Сохраняем в session state (уже сохранено выше, но для совместимости оставляем)
                 st.session_state.selection_mode = selection_mode
-                st.session_state.excluded_features = excluded_features if excluded_features else []
-                st.session_state.included_features = included_features if included_features else []
                 
                 # Показываем текущий статус
                 st.markdown("---")
@@ -601,11 +711,109 @@ def render_dashboard():
                     else:
                         st.warning("⚠️ Не выбрано ни одного признака! Будут использованы все признаки.")
                 else:
-                    st.info(f"ℹ️ Используются все {len(numeric_cols)} признаков")
+                    # Определяем тип признаков для информативного сообщения
+                    if use_relative_features:
+                        expected_count = 30  # 10 классов × 3
+                        feature_type = "относительных"
+                    else:
+                        expected_count = 22  # 11 классов × 2 (10 патологических + 1 Crypts)
+                        feature_type = "абсолютных"
+                    
+                    actual_count = len(feature_cols)
+                    total_numeric_count = len(numeric_cols)
+                    excluded_count = total_numeric_count - actual_count
+                    
+                    if actual_count == expected_count:
+                        st.info(f"ℹ️ Используются все {actual_count} {feature_type} признаков")
+                    else:
+                        # Определяем стандартные классы для сравнения
+                        if use_relative_features:
+                            standard_classes = [
+                                'Mild', 'Dysplasia', 'Moderate', 'Meta', 'Plasma Cells',
+                                'Neutrophils', 'EoE', 'Enterocytes', 'Granulomas', 'Paneth'
+                            ]
+                            standard_features = []
+                            for cls in standard_classes:
+                                standard_features.extend([
+                                    f"{cls}_relative_count",
+                                    f"{cls}_relative_area",
+                                    f"{cls}_mean_relative_area"
+                                ])
+                        else:
+                            standard_classes = [
+                                'Crypts', 'Mild', 'Dysplasia', 'Moderate', 'Meta',
+                                'Plasma Cells', 'Neutrophils', 'EoE', 'Enterocytes', 'Granulomas', 'Paneth'
+                            ]
+                            standard_features = []
+                            for cls in standard_classes:
+                                standard_features.extend([
+                                    f"{cls}_count",
+                                    f"{cls}_area"
+                                ])
+                        
+                        # Находим дополнительные признаки
+                        additional_features = [f for f in feature_cols if f not in standard_features]
+                        missing_features = [f for f in standard_features if f not in feature_cols]
+                        
+                        warning_msg = (
+                            f"⚠️ Обнаружено {actual_count} признаков классов (ожидается {expected_count} {feature_type} признаков). "
+                        )
+                        
+                        if additional_features:
+                            warning_msg += (
+                                f"\n\n📌 **Дополнительные признаки** (не из стандартного списка): "
+                                f"{', '.join(sorted(additional_features)[:10])}"
+                                f"{'...' if len(additional_features) > 10 else ''}"
+                            )
+                        
+                        if missing_features:
+                            warning_msg += (
+                                f"\n\n❌ **Отсутствующие стандартные признаки**: "
+                                f"{', '.join(sorted(missing_features)[:10])}"
+                                f"{'...' if len(missing_features) > 10 else ''}"
+                            )
+                        
+                        if excluded_count > 0:
+                            service_cols_found = [col for col in numeric_cols if any(service in col.lower() for service in service_columns)]
+                            warning_msg += (
+                                f"\n\nИсключено {excluded_count} служебных колонок из предыдущего анализа: "
+                                f"{', '.join(service_cols_found[:5])}{'...' if len(service_cols_found) > 5 else ''}. "
+                                f"Всего числовых колонок: {total_numeric_count}."
+                            )
+                        
+                        st.warning(warning_msg)
+                        
+                        # Показываем список найденных признаков для диагностики
+                        with st.expander("🔍 Диагностика: список найденных признаков"):
+                            st.write(f"**Всего числовых колонок:** {total_numeric_count}")
+                            st.write(f"**Признаков классов:** {actual_count}")
+                            st.write(f"**Ожидается:** {expected_count}")
+                            st.write(f"**Служебных колонок:** {excluded_count}")
+                            
+                            st.write(f"\n**Найденные признаки классов ({len(feature_cols)}):**")
+                            st.write(sorted(feature_cols))
+                            
+                            if additional_features:
+                                st.write(f"\n**Дополнительные признаки ({len(additional_features)}):**")
+                                st.write(sorted(additional_features))
+                            
+                            if missing_features:
+                                st.write(f"\n**Отсутствующие стандартные признаки ({len(missing_features)}):**")
+                                st.write(sorted(missing_features))
+                            
+                            if excluded_count > 0:
+                                st.write(f"\n**Исключенные служебные колонки ({excluded_count}):**")
+                                st.write(sorted([col for col in numeric_cols if col not in feature_cols]))
                 
                 # Рекомендации
                 with st.expander("💡 Рекомендации по выбору признаков"):
-                    st.markdown("""
+                    st.markdown(f"""
+                    **О количестве признаков:**
+                    - **Относительные признаки:** ожидается 30 признаков (10 классов × 3 типа признаков, без Crypts)
+                    - **Абсолютные признаки:** ожидается 22 признака (11 классов × 2 типа признаков: 10 патологических + 1 Crypts)
+                    - Если вы видите другое количество, возможно, присутствуют дополнительные колонки из предыдущего анализа
+                    - Подробнее см. [docs/FEATURES.md](docs/FEATURES.md)
+                    
                     **Когда стоит исключать признаки (blacklist):**
                     
                     1. **Аномально высокие значения** (например, Meta_relative_count > 50)
@@ -624,7 +832,7 @@ def render_dashboard():
                        - Нажмите кнопку "Только патология" для быстрого выбора
                        - Или выберите вручную: Dysplasia, Mild, Moderate признаки
                     
-                    **После изменения признаков** данные автоматически пересчитаются.
+                    **После изменения признаков** нажмите кнопку "Обновить" для применения изменений.
                     """)
             else:
                 st.info("Загрузите данные, чтобы выбрать признаки")
@@ -640,11 +848,37 @@ def render_dashboard():
                 if "image" in numeric_cols:
                     numeric_cols.remove("image")
 
-                selected_features = st.multiselect(
-                    "Выберите признаки для визуализации",
-                    numeric_cols,
-                    default=numeric_cols[:5] if len(numeric_cols) >= 5 else numeric_cols,
-                )
+                # Инициализируем session_state для выбранных признаков
+                # По умолчанию выбираем все признаки для визуализации
+                if "selected_features_distribution" not in st.session_state:
+                    st.session_state.selected_features_distribution = numeric_cols
+                
+                # Фильтруем сохраненные значения, чтобы они были только из доступных опций
+                saved_features = st.session_state.selected_features_distribution
+                valid_default = [f for f in saved_features if f in numeric_cols]
+                
+                # Если нет валидных значений, используем все доступные
+                if not valid_default:
+                    valid_default = numeric_cols
+                    st.session_state.selected_features_distribution = valid_default
+
+                st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
+                
+                with st.form("feature_distribution_form", clear_on_submit=False):
+                    selected_features = st.multiselect(
+                        "Выберите признаки для визуализации",
+                        numeric_cols,
+                        default=valid_default,
+                        key="selected_features_distribution_form",
+                    )
+                    
+                    submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
+                    if submitted:
+                        st.session_state.selected_features_distribution = selected_features
+                        st.rerun()
+                
+                # Используем сохраненные значения
+                selected_features = st.session_state.selected_features_distribution
 
                 if selected_features:
                     cols = st.columns(2)
@@ -767,146 +1001,181 @@ def render_dashboard():
                 """)
 
             if use_spectral_analysis and len(df_features) > 0:
-                # Обучение спектрального анализатора
-                with st.spinner("Обучение спектрального анализатора..."):
-                    analyzer = spectral_analysis.SpectralAnalyzer()
+                # Проверяем, нужно ли переобучить анализатор
+                # Переобучаем только если изменились параметры или данных нет в session_state
+                spectral_settings_key = f"spectral_settings_{hash(str(df_features.values.tobytes()))}_{percentile_low}_{percentile_high}"
+                need_retrain = (
+                    "analyzer" not in st.session_state or
+                    "spectral_settings_key" not in st.session_state or
+                    st.session_state.spectral_settings_key != spectral_settings_key
+                )
+                
+                if need_retrain:
+                    # Обучение спектрального анализатора
+                    with st.spinner("Обучение спектрального анализатора..."):
+                        analyzer = spectral_analysis.SpectralAnalyzer()
 
-                    # PCA
-                    analyzer.fit_pca(df_features)
+                        # PCA
+                        analyzer.fit_pca(df_features)
 
-                    # Преобразование через PCA
-                    df_pca = analyzer.transform_pca(df_features)
+                        # Преобразование через PCA
+                        df_pca = analyzer.transform_pca(df_features)
 
-                    # Анализ спектра
-                    analyzer.fit_spectrum(
-                        df_pca,
-                        percentile_low=percentile_low,
-                        percentile_high=percentile_high,
+                        # Анализ спектра
+                        analyzer.fit_spectrum(
+                            df_pca,
+                            percentile_low=percentile_low,
+                            percentile_high=percentile_high,
+                        )
+                        
+                        # Сохраняем в session_state
+                        st.session_state.analyzer = analyzer
+                        st.session_state.df_pca = df_pca
+                        st.session_state.spectral_settings_key = spectral_settings_key
+                else:
+                    # Используем сохраненный анализатор
+                    analyzer = st.session_state.analyzer
+                    df_pca = st.session_state.df_pca
+                
+                # GMM (опционально) - выполняется независимо от переобучения
+                use_gmm = st.checkbox("Использовать GMM для моделирования состояний")
+                if use_gmm:
+                    # Оценка качества для разного числа компонентов
+                    with st.expander("🔍 Анализ качества аппроксимации GMM"):
+                        st.markdown("**Оцените качество аппроксимации для разного числа компонентов:**")
+                        
+                        # Кэширование результатов оценки качества
+                        cache_key = f"gmm_quality_{hash(str(df_pca['PC1'].values.tobytes()))}"
+                        if cache_key not in st.session_state:
+                            with st.spinner("Вычисление метрик качества GMM (это может занять время)..."):
+                                try:
+                                    # Ограничиваем max_components для ускорения (5 вместо 10)
+                                    quality_df = analyzer.evaluate_gmm_quality(df_pca, max_components=5)
+                                    st.session_state[cache_key] = quality_df
+                                except Exception as e:
+                                    st.warning(f"Не удалось оценить качество: {e}")
+                                    quality_df = pd.DataFrame()
+                        else:
+                            quality_df = st.session_state[cache_key]
+                        
+                        try:
+                            if not quality_df.empty:
+                                st.dataframe(quality_df, use_container_width=True, hide_index=True)
+                                
+                                # График метрик качества
+                                fig_quality, axes = plt.subplots(2, 2, figsize=(14, 10))
+                                
+                                n_components = quality_df["Число компонентов"]
+                                
+                                # BIC
+                                axes[0, 0].plot(n_components, quality_df["BIC"], 'o-', linewidth=2, markersize=8)
+                                axes[0, 0].set_xlabel("Число компонентов")
+                                axes[0, 0].set_ylabel("BIC")
+                                axes[0, 0].set_title("BIC (меньше = лучше)")
+                                axes[0, 0].grid(True, alpha=0.3)
+                                
+                                # RMSE
+                                axes[0, 1].plot(n_components, quality_df["RMSE"], 'o-', linewidth=2, markersize=8, color='red')
+                                axes[0, 1].set_xlabel("Число компонентов")
+                                axes[0, 1].set_ylabel("RMSE")
+                                axes[0, 1].set_title("RMSE (меньше = лучше)")
+                                axes[0, 1].grid(True, alpha=0.3)
+                                
+                                # R²
+                                axes[1, 0].plot(n_components, quality_df["R²"], 'o-', linewidth=2, markersize=8, color='green')
+                                axes[1, 0].set_xlabel("Число компонентов")
+                                axes[1, 0].set_ylabel("R²")
+                                axes[1, 0].set_title("R² (больше = лучше)")
+                                axes[1, 0].grid(True, alpha=0.3)
+                                
+                                # Max Error
+                                axes[1, 1].plot(n_components, quality_df["Max Error"], 'o-', linewidth=2, markersize=8, color='orange')
+                                axes[1, 1].set_xlabel("Число компонентов")
+                                axes[1, 1].set_ylabel("Max Error")
+                                axes[1, 1].set_title("Максимальная ошибка")
+                                axes[1, 1].grid(True, alpha=0.3)
+                                
+                                plt.tight_layout()
+                                st.pyplot(fig_quality)
+                                plt.close(fig_quality)
+                                
+                                # Рекомендация
+                                best_rmse_idx = quality_df["RMSE"].idxmin()
+                                best_bic_idx = quality_df["BIC"].idxmin()
+                                best_r2_idx = quality_df["R²"].idxmax()
+                                
+                                # Сравнение RMSE для 2 и 3 компонентов
+                                rmse_2 = None
+                                rmse_3 = None
+                                if 2 in quality_df["Число компонентов"].values:
+                                    rmse_2 = quality_df[quality_df["Число компонентов"] == 2]["RMSE"].values[0]
+                                if 3 in quality_df["Число компонентов"].values:
+                                    rmse_3 = quality_df[quality_df["Число компонентов"] == 3]["RMSE"].values[0]
+                                
+                                comparison_text = ""
+                                if rmse_2 is not None and rmse_3 is not None:
+                                    improvement = ((rmse_2 - rmse_3) / rmse_2) * 100
+                                    if rmse_3 < rmse_2:
+                                        comparison_text = f"\n\n**Сравнение 2 vs 3 компонентов:**\n- 2 компонента: RMSE={rmse_2:.4f}\n- 3 компонента: RMSE={rmse_3:.4f}\n- **Улучшение на {improvement:.1f}%** при использовании 3 компонентов ✅"
+                                    else:
+                                        comparison_text = f"\n\n**Сравнение 2 vs 3 компонентов:**\n- 2 компонента: RMSE={rmse_2:.4f}\n- 3 компонента: RMSE={rmse_3:.4f}\n- 2 компонента дают лучший RMSE, но BIC может выбрать другое число"
+                                
+                                st.info(f"""
+                                **Рекомендации:**
+                                - По RMSE: {int(quality_df.loc[best_rmse_idx, "Число компонентов"])} компонентов (RMSE={quality_df.loc[best_rmse_idx, "RMSE"]:.4f})
+                                - По BIC: {int(quality_df.loc[best_bic_idx, "Число компонентов"])} компонентов (BIC={quality_df.loc[best_bic_idx, "BIC"]:.1f})
+                                - По R²: {int(quality_df.loc[best_r2_idx, "Число компонентов"])} компонентов (R²={quality_df.loc[best_r2_idx, "R²"]:.4f})
+                                {comparison_text}
+                                
+                                **Интерпретация:**
+                                - **RMSE** показывает точность аппроксимации (меньше = лучше)
+                                - **BIC** балансирует точность и сложность модели (меньше = лучше, но может выбрать меньше компонентов)
+                                - Если RMSE лучше с 3 компонентами, но BIC выбрал 2 - это означает компромисс между точностью и простотой модели
+                                - Для практических целей (классификация, шкала) можно использовать число компонентов с лучшим RMSE
+                                """)
+                        except Exception as e:
+                            st.warning(f"Не удалось оценить качество: {e}")
+                    
+                    # Выбор числа компонентов
+                    auto_components = st.checkbox(
+                        "Автоматический выбор числа компонентов (BIC)",
+                        value=True,
+                        help="Если выключено, можно задать число компонентов вручную"
+                    )
+                    
+                    n_components = None
+                    if not auto_components:
+                        n_components = st.slider(
+                            "Число компонентов GMM",
+                            min_value=1,
+                            max_value=min(10, len(df_pca) // 2),
+                            value=2,
+                            help="Увеличьте число компонентов для лучшей аппроксимации, но осторожно с переобучением"
+                        )
+                    
+                    analyzer.fit_gmm(df_pca, n_components=n_components)
+                    
+                    # Показываем информацию о выбранном числе компонентов
+                    if analyzer.gmm is not None:
+                        st.success(f"✅ GMM обучен с {analyzer.gmm.n_components} компонентами")
+                    # Обновляем анализатор в session_state после обучения GMM
+                    st.session_state.analyzer = analyzer
+
+                # Опция выбора метода классификации
+                use_gmm_classification = False
+                if use_gmm and analyzer.gmm is not None:
+                    use_gmm_classification = st.checkbox(
+                        "Использовать GMM компоненты для классификации образцов",
+                        value=False,
+                        help="Если включено, образцы классифицируются по принадлежности к GMM компонентам. "
+                             "Если выключено, используется фиксированное разделение на 4 категории (normal/mild/moderate/severe) "
+                             "на основе позиции на спектральной шкале."
                     )
 
-                    # GMM (опционально)
-                    use_gmm = st.checkbox("Использовать GMM для моделирования состояний")
-                    if use_gmm:
-                        # Оценка качества для разного числа компонентов
-                        with st.expander("🔍 Анализ качества аппроксимации GMM"):
-                            st.markdown("**Оцените качество аппроксимации для разного числа компонентов:**")
-                            
-                            try:
-                                quality_df = analyzer.evaluate_gmm_quality(df_pca, max_components=10)
-                                if not quality_df.empty:
-                                    st.dataframe(quality_df, use_container_width=True, hide_index=True)
-                                    
-                                    # График метрик качества
-                                    fig_quality, axes = plt.subplots(2, 2, figsize=(14, 10))
-                                    
-                                    n_components = quality_df["Число компонентов"]
-                                    
-                                    # BIC
-                                    axes[0, 0].plot(n_components, quality_df["BIC"], 'o-', linewidth=2, markersize=8)
-                                    axes[0, 0].set_xlabel("Число компонентов")
-                                    axes[0, 0].set_ylabel("BIC")
-                                    axes[0, 0].set_title("BIC (меньше = лучше)")
-                                    axes[0, 0].grid(True, alpha=0.3)
-                                    
-                                    # RMSE
-                                    axes[0, 1].plot(n_components, quality_df["RMSE"], 'o-', linewidth=2, markersize=8, color='red')
-                                    axes[0, 1].set_xlabel("Число компонентов")
-                                    axes[0, 1].set_ylabel("RMSE")
-                                    axes[0, 1].set_title("RMSE (меньше = лучше)")
-                                    axes[0, 1].grid(True, alpha=0.3)
-                                    
-                                    # R²
-                                    axes[1, 0].plot(n_components, quality_df["R²"], 'o-', linewidth=2, markersize=8, color='green')
-                                    axes[1, 0].set_xlabel("Число компонентов")
-                                    axes[1, 0].set_ylabel("R²")
-                                    axes[1, 0].set_title("R² (больше = лучше)")
-                                    axes[1, 0].grid(True, alpha=0.3)
-                                    
-                                    # Max Error
-                                    axes[1, 1].plot(n_components, quality_df["Max Error"], 'o-', linewidth=2, markersize=8, color='orange')
-                                    axes[1, 1].set_xlabel("Число компонентов")
-                                    axes[1, 1].set_ylabel("Max Error")
-                                    axes[1, 1].set_title("Максимальная ошибка")
-                                    axes[1, 1].grid(True, alpha=0.3)
-                                    
-                                    plt.tight_layout()
-                                    st.pyplot(fig_quality)
-                                    plt.close(fig_quality)
-                                    
-                                    # Рекомендация
-                                    best_rmse_idx = quality_df["RMSE"].idxmin()
-                                    best_bic_idx = quality_df["BIC"].idxmin()
-                                    best_r2_idx = quality_df["R²"].idxmax()
-                                    
-                                    # Сравнение RMSE для 2 и 3 компонентов
-                                    rmse_2 = None
-                                    rmse_3 = None
-                                    if 2 in quality_df["Число компонентов"].values:
-                                        rmse_2 = quality_df[quality_df["Число компонентов"] == 2]["RMSE"].values[0]
-                                    if 3 in quality_df["Число компонентов"].values:
-                                        rmse_3 = quality_df[quality_df["Число компонентов"] == 3]["RMSE"].values[0]
-                                    
-                                    comparison_text = ""
-                                    if rmse_2 is not None and rmse_3 is not None:
-                                        improvement = ((rmse_2 - rmse_3) / rmse_2) * 100
-                                        if rmse_3 < rmse_2:
-                                            comparison_text = f"\n\n**Сравнение 2 vs 3 компонентов:**\n- 2 компонента: RMSE={rmse_2:.4f}\n- 3 компонента: RMSE={rmse_3:.4f}\n- **Улучшение на {improvement:.1f}%** при использовании 3 компонентов ✅"
-                                        else:
-                                            comparison_text = f"\n\n**Сравнение 2 vs 3 компонентов:**\n- 2 компонента: RMSE={rmse_2:.4f}\n- 3 компонента: RMSE={rmse_3:.4f}\n- 2 компонента дают лучший RMSE, но BIC может выбрать другое число"
-                                    
-                                    st.info(f"""
-                                    **Рекомендации:**
-                                    - По RMSE: {int(quality_df.loc[best_rmse_idx, "Число компонентов"])} компонентов (RMSE={quality_df.loc[best_rmse_idx, "RMSE"]:.4f})
-                                    - По BIC: {int(quality_df.loc[best_bic_idx, "Число компонентов"])} компонентов (BIC={quality_df.loc[best_bic_idx, "BIC"]:.1f})
-                                    - По R²: {int(quality_df.loc[best_r2_idx, "Число компонентов"])} компонентов (R²={quality_df.loc[best_r2_idx, "R²"]:.4f})
-                                    {comparison_text}
-                                    
-                                    **Интерпретация:**
-                                    - **RMSE** показывает точность аппроксимации (меньше = лучше)
-                                    - **BIC** балансирует точность и сложность модели (меньше = лучше, но может выбрать меньше компонентов)
-                                    - Если RMSE лучше с 3 компонентами, но BIC выбрал 2 - это означает компромисс между точностью и простотой модели
-                                    - Для практических целей (классификация, шкала) можно использовать число компонентов с лучшим RMSE
-                                    """)
-                            except Exception as e:
-                                st.warning(f"Не удалось оценить качество: {e}")
-                        
-                        # Выбор числа компонентов
-                        auto_components = st.checkbox(
-                            "Автоматический выбор числа компонентов (BIC)",
-                            value=True,
-                            help="Если выключено, можно задать число компонентов вручную"
-                        )
-                        
-                        n_components = None
-                        if not auto_components:
-                            n_components = st.slider(
-                                "Число компонентов GMM",
-                                min_value=1,
-                                max_value=min(10, len(df_pca) // 2),
-                                value=2,
-                                help="Увеличьте число компонентов для лучшей аппроксимации, но осторожно с переобучением"
-                            )
-                        
-                        analyzer.fit_gmm(df_pca, n_components=n_components)
-                        
-                        # Показываем информацию о выбранном числе компонентов
-                        if analyzer.gmm is not None:
-                            st.success(f"✅ GMM обучен с {analyzer.gmm.n_components} компонентами")
-
-                    # Опция выбора метода классификации
-                    use_gmm_classification = False
-                    if use_gmm and analyzer.gmm is not None:
-                        use_gmm_classification = st.checkbox(
-                            "Использовать GMM компоненты для классификации образцов",
-                            value=False,
-                            help="Если включено, образцы классифицируются по принадлежности к GMM компонентам. "
-                                 "Если выключено, используется фиксированное разделение на 4 категории (normal/mild/moderate/severe) "
-                                 "на основе позиции на спектральной шкале."
-                        )
-
-                    # Преобразование в спектральную шкалу
-                    df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification)
-
+                # Преобразование в спектральную шкалу
+                df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)
+                
+                # Обновляем анализатор в session_state (на случай если был обучен GMM)
                 st.session_state.analyzer = analyzer
 
                 # Информация о спектре
@@ -933,6 +1202,116 @@ def render_dashboard():
 
                 # Визуализация спектра
                 st.subheader("Визуализация спектра")
+                
+                with st.expander("🔬 Как вычисляется PC1 для конкретного WSI?"):
+                    st.markdown("""
+                    ## Вычисление PC1 для конкретного WSI
+                    
+                    После обучения PCA модели, для каждого WSI вычисляется значение PC1 следующим образом:
+                    
+                    ### Шаг 1: Извлечение признаков WSI
+                    ```
+                    X_wsi = [признак₁, признак₂, ..., признакₙ]
+                    ```
+                    Например, для WSI "image_001.tif":
+                    ```
+                    X_wsi = [Mild_relative_count=0.5, Dysplasia_relative_area=1.2, ..., Paneth_mean_relative_area=0.3]
+                    ```
+                    
+                    ### Шаг 2: Стандартизация признаков WSI
+                    Используются те же параметры стандартизации (μ и σ), что были вычислены при обучении:
+                    ```
+                    X_wsi_scaled[i] = (X_wsi[i] - μᵢ) / σᵢ
+                    ```
+                    Где:
+                    - `μᵢ` - среднее значение i-го признака из обучающей выборки
+                    - `σᵢ` - стандартное отклонение i-го признака из обучающей выборки
+                    
+                    **Важно:** Используются параметры из обучения, а не пересчитываются заново!
+                    
+                    ### Шаг 3: Вычисление PC1
+                    ```
+                    PC1(wsi) = loading₁ × X_wsi_scaled[1] + loading₂ × X_wsi_scaled[2] + ... + loadingₙ × X_wsi_scaled[n]
+                    ```
+                    
+                    Или в матричной форме:
+                    ```
+                    PC1(wsi) = loadings^T × X_wsi_scaled
+                    ```
+                    Где `loadings` - вектор loadings первой главной компоненты (из `pca.components_[0]`)
+                    
+                    ### Шаг 4: Нормализация PC1 (опционально)
+                    Для получения шкалы от 0 до 1:
+                    ```
+                    PC1_norm(wsi) = (PC1(wsi) - PC1_min) / (PC1_max - PC1_min)
+                    ```
+                    Где `PC1_min` и `PC1_max` - минимальное и максимальное значения PC1 из обучающей выборки
+                    
+                    ---
+                    
+                    **Пример вычисления PC1 для конкретного WSI:**
+                    
+                    Предположим, у нас есть WSI со следующими признаками:
+                    ```
+                    Mild_relative_count = 0.8
+                    Dysplasia_relative_area = 1.5
+                    Crypts_count = 100
+                    ```
+                    
+                    После стандартизации (используя μ и σ из обучения):
+                    ```
+                    Mild_relative_count_scaled = (0.8 - 0.5) / 0.3 = 1.0
+                    Dysplasia_relative_area_scaled = (1.5 - 1.0) / 0.5 = 1.0
+                    Crypts_count_scaled = (100 - 120) / 20 = -1.0
+                    ```
+                    
+                    Если loadings:
+                    ```
+                    Mild_relative_count: loading = +0.25
+                    Dysplasia_relative_area: loading = +0.30
+                    Crypts_count: loading = -0.10
+                    ```
+                    
+                    Тогда PC1 вычисляется как:
+                    ```
+                    PC1(wsi) = (0.25 × 1.0) + (0.30 × 1.0) + (-0.10 × -1.0)
+                             = 0.25 + 0.30 + 0.10
+                             = 0.65
+                    ```
+                    
+                    Если PC1_min = -2.0 и PC1_max = 3.0 из обучающей выборки:
+                    ```
+                    PC1_norm(wsi) = (0.65 - (-2.0)) / (3.0 - (-2.0))
+                                 = 2.65 / 5.0
+                                 = 0.53
+                    ```
+                    
+                    **Интерпретация:** WSI имеет PC1_norm = 0.53, что означает средний уровень патологии (ближе к середине шкалы).
+                    
+                    ---
+                    
+                    **Где это происходит в коде:**
+                    
+                    В `scale/pca_scoring.py`, метод `transform()`:
+                    ```python
+                    # 1. Извлечение признаков
+                    X = df[feature_columns].fillna(0).values
+                    
+                    # 2. Стандартизация (используя параметры из обучения)
+                    X_scaled = self.scaler.transform(X)  # ← использует self.scaler.mean_ и self.scaler.scale_
+                    
+                    # 3. Вычисление PC1 (используя loadings из обучения)
+                    X_pca = self.pca.transform(X_scaled)  # ← использует self.pca.components_
+                    PC1 = X_pca[:, 0]  # Первая колонка = PC1 для каждого образца
+                    
+                    # 4. Нормализация
+                    PC1_norm = (PC1 - self.pc1_min) / (self.pc1_max - self.pc1_min)
+                    ```
+                    
+                    **Ключевой момент:** Все параметры (μ, σ, loadings, PC1_min, PC1_max) фиксируются при обучении (`fit()`) и используются для всех последующих WSI (`transform()`).
+                    
+                    Подробнее см. [docs/PCA.md](docs/PCA.md)
+                    """)
                 
                 with st.expander("ℹ️ Как интерпретировать графики спектра?"):
                     st.markdown("""
@@ -1166,6 +1545,325 @@ def render_dashboard():
                     "**Loadings PC1** показывают вклад каждого признака в первую главную компоненту. "
                     "Чем больше абсолютное значение, тем важнее признак для разделения образцов."
                 )
+                
+                # Подробное объяснение вычисления важности
+                with st.expander("🔬 Как вычисляется важность признака?"):
+                    st.markdown("""
+                    ## Математический процесс вычисления важности признаков
+                    
+                    ### Шаг 1: Стандартизация данных
+                    Перед применением PCA все признаки стандартизируются (нормализуются):
+                    ```
+                    X_scaled = (X - μ) / σ
+                    ```
+                    Где:
+                    - `X` - исходные значения признаков
+                    - `μ` - среднее значение признака
+                    - `σ` - стандартное отклонение признака
+                    
+                    **Зачем это нужно:** Признаки имеют разные масштабы (например, count может быть 0-100, а area - 0-10000). 
+                    Стандартизация приводит все признаки к одному масштабу, чтобы ни один признак не доминировал из-за больших числовых значений.
+                    
+                    ---
+                    
+                    ### Шаг 2: Применение PCA
+                    PCA (Principal Component Analysis) находит главные компоненты - направления максимальной вариации в данных.
+                    
+                    **Первая главная компонента (PC1)** - это направление, вдоль которого данные варьируются больше всего.
+                    Она максимизирует дисперсию и лучше всего разделяет образцы по степени патологии.
+                    
+                    #### 📐 Матрица ковариации и её роль в PCA
+                    
+                    **Математическая основа PCA:**
+                    
+                    PCA можно вычислить двумя эквивалентными способами:
+                    
+                    **Способ 1: Через матрицу ковариации (классический подход)**
+                    
+                    1. **Вычисление матрицы ковариации:**
+                       ```
+                       Cov = (1/(n-1)) × X_scaled^T × X_scaled
+                       ```
+                       Где:
+                       - `X_scaled` - матрица стандартизированных данных (размер: n образцов × p признаков)
+                       - `n` - число образцов
+                       - `p` - число признаков
+                       - `Cov` - матрица ковариации (размер: p × p)
+                    
+                    2. **Элементы матрицы ковариации:**
+                       ```
+                       Cov[i, j] = (1/(n-1)) × Σ (x_i - μ_i) × (x_j - μ_j)
+                       ```
+                       - `Cov[i, i]` - дисперсия i-го признака (диагональные элементы)
+                       - `Cov[i, j]` - ковариация между признаками i и j (недиагональные элементы)
+                       - Ковариация показывает, как два признака изменяются вместе
+                    
+                    3. **Собственные векторы и собственные значения:**
+                       ```
+                       Cov × v = λ × v
+                       ```
+                       Где:
+                       - `v` - собственный вектор (eigenvector) = направление главной компоненты
+                       - `λ` - собственное значение (eigenvalue) = дисперсия вдоль этого направления
+                       - Собственные векторы упорядочены по убыванию собственных значений
+                       - Первый собственный вектор (с наибольшим λ) = PC1
+                    
+                    **Способ 2: Через SVD (Singular Value Decomposition) - используется в sklearn**
+                    
+                    Sklearn использует более эффективный численный метод - SVD:
+                    ```
+                    X_scaled = U × Σ × V^T
+                    ```
+                    Где:
+                    - `V^T` - транспонированная матрица правых сингулярных векторов = loadings (components_)
+                    - `Σ` - диагональная матрица сингулярных значений (связана с собственными значениями)
+                    - `U` - матрица левых сингулярных векторов
+                    
+                    **Связь между методами:**
+                    - Собственные векторы матрицы ковариации = сингулярные векторы V из SVD
+                    - Собственные значения = квадраты сингулярных значений, деленные на (n-1)
+                    - Оба метода дают одинаковые результаты, но SVD численно более устойчив
+                    
+                    **Почему матрица ковариации важна?**
+                    
+                    1. **Диагональные элементы (дисперсии):**
+                       - Показывают, насколько каждый признак варьируется
+                       - Признаки с большой дисперсией потенциально важнее
+                    
+                    2. **Недиагональные элементы (ковариации):**
+                       - Показывают корреляции между признаками
+                       - Если два признака сильно коррелируют, PCA объединяет их в одну компоненту
+                       - Это позволяет уменьшить размерность без потери информации
+                    
+                    3. **Собственные векторы:**
+                       - Направления максимальной вариации в данных
+                       - PC1 = направление наибольшей вариации
+                       - PC2 = направление второй по величине вариации (ортогонально к PC1)
+                    
+                    **Пример вычисления матрицы ковариации:**
+                    
+                    Предположим, у нас есть 3 образца и 2 признака:
+                    ```
+                    X_scaled = [[1.0, 0.5],
+                                [0.0, -0.5],
+                                [-1.0, 0.0]]
+                    ```
+                    
+                    Матрица ковариации:
+                    ```
+                    Cov = (1/(3-1)) × X_scaled^T × X_scaled
+                        = 0.5 × [[1.0, 0.0, -1.0],    [[1.0, 0.5],
+                                 [0.5, -0.5, 0.0]]  ×   [0.0, -0.5],
+                                                         [-1.0, 0.0]]
+                        = [[1.0, 0.25],
+                           [0.25, 0.25]]
+                    ```
+                    
+                    Диагональные элементы: дисперсии признаков (1.0 и 0.25)
+                    Недиагональные элементы: ковариация между признаками (0.25)
+                    
+                    **Где это происходит в коде?**
+                    
+                    В нашем коде (`scale/pca_scoring.py` и `scale/spectral_analysis.py`):
+                    ```python
+                    # Стандартизация данных
+                    X_scaled = scaler.fit_transform(X)
+                    
+                    # PCA обучение (внутри sklearn использует SVD)
+                    pca = PCA(n_components=None)
+                    pca.fit(X_scaled)  # ← Здесь вычисляется матрица ковариации (через SVD)
+                    
+                    # Loadings доступны через:
+                    loadings = pca.components_[0]  # Первая главная компонента
+                    ```
+                    
+                    Sklearn автоматически:
+                    1. Вычисляет матрицу ковариации (или эквивалент через SVD)
+                    2. Находит собственные векторы и собственные значения
+                    3. Сохраняет их в `pca.components_` (loadings) и `pca.explained_variance_` (собственные значения)
+                    
+                    **Доступ к матрице ковариации:**
+                    
+                    Если нужно явно получить матрицу ковариации из обученной PCA модели:
+                    ```python
+                    # Матрица ковариации (если нужна явно)
+                    covariance_matrix = pca.get_covariance()  # Доступна в sklearn PCA
+                    
+                    # Или можно вычислить вручную:
+                    import numpy as np
+                    covariance_matrix = np.cov(X_scaled.T)  # Транспонируем для правильной размерности
+                    ```
+                    
+                    ---
+                    
+                    ### Шаг 3: Извлечение loadings
+                    **Loadings (коэффициенты загрузки)** - это веса, которые показывают, как каждый признак вносит вклад в PC1.
+                    
+                    Loadings берутся из первой строки матрицы `components_` обученной PCA модели:
+                    ```python
+                    loadings = pca.components_[0]  # Первая строка = первая главная компонента
+                    ```
+                    
+                    **Математически:** PC1 вычисляется как линейная комбинация стандартизированных признаков:
+                    ```
+                    PC1 = loading₁ × признак₁ + loading₂ × признак₂ + ... + loadingₙ × признакₙ
+                    ```
+                    
+                    ---
+                    
+                    ### 🔄 Вычисление PC1 для конкретного WSI
+                    
+                    После обучения PCA модели, для каждого нового WSI (включая те, на которых обучалась модель) вычисляется PC1 следующим образом:
+                    
+                    **Шаг 1: Извлечение признаков WSI**
+                    ```
+                    X_wsi = [признак₁, признак₂, ..., признакₙ]
+                    ```
+                    Например, для WSI "image_001.tif":
+                    ```
+                    X_wsi = [Mild_relative_count=0.5, Dysplasia_relative_area=1.2, ..., Paneth_mean_relative_area=0.3]
+                    ```
+                    
+                    **Шаг 2: Стандартизация признаков WSI**
+                    Используются те же параметры стандартизации (μ и σ), что были вычислены при обучении:
+                    ```
+                    X_wsi_scaled[i] = (X_wsi[i] - μᵢ) / σᵢ
+                    ```
+                    Где:
+                    - `μᵢ` - среднее значение i-го признака из обучающей выборки
+                    - `σᵢ` - стандартное отклонение i-го признака из обучающей выборки
+                    
+                    **Важно:** Используются параметры из обучения, а не пересчитываются заново!
+                    
+                    **Шаг 3: Вычисление PC1**
+                    ```
+                    PC1(wsi) = loading₁ × X_wsi_scaled[1] + loading₂ × X_wsi_scaled[2] + ... + loadingₙ × X_wsi_scaled[n]
+                    ```
+                    
+                    Или в матричной форме:
+                    ```
+                    PC1(wsi) = loadings^T × X_wsi_scaled
+                    ```
+                    Где `loadings` - вектор loadings первой главной компоненты (из `pca.components_[0]`)
+                    
+                    **Шаг 4: Нормализация PC1 (опционально)**
+                    Для получения шкалы от 0 до 1:
+                    ```
+                    PC1_norm(wsi) = (PC1(wsi) - PC1_min) / (PC1_max - PC1_min)
+                    ```
+                    Где `PC1_min` и `PC1_max` - минимальное и максимальное значения PC1 из обучающей выборки
+                    
+                    ---
+                    
+                    **Пример вычисления PC1 для конкретного WSI:**
+                    
+                    Предположим, у нас есть WSI со следующими признаками:
+                    ```
+                    Mild_relative_count = 0.8
+                    Dysplasia_relative_area = 1.5
+                    Crypts_count = 100
+                    ```
+                    
+                    После стандартизации (используя μ и σ из обучения):
+                    ```
+                    Mild_relative_count_scaled = (0.8 - 0.5) / 0.3 = 1.0
+                    Dysplasia_relative_area_scaled = (1.5 - 1.0) / 0.5 = 1.0
+                    Crypts_count_scaled = (100 - 120) / 20 = -1.0
+                    ```
+                    
+                    Если loadings:
+                    ```
+                    Mild_relative_count: loading = +0.25
+                    Dysplasia_relative_area: loading = +0.30
+                    Crypts_count: loading = -0.10
+                    ```
+                    
+                    Тогда PC1 вычисляется как:
+                    ```
+                    PC1(wsi) = (0.25 × 1.0) + (0.30 × 1.0) + (-0.10 × -1.0)
+                             = 0.25 + 0.30 + 0.10
+                             = 0.65
+                    ```
+                    
+                    Если PC1_min = -2.0 и PC1_max = 3.0 из обучающей выборки:
+                    ```
+                    PC1_norm(wsi) = (0.65 - (-2.0)) / (3.0 - (-2.0))
+                                 = 2.65 / 5.0
+                                 = 0.53
+                    ```
+                    
+                    **Интерпретация:** WSI имеет PC1_norm = 0.53, что означает средний уровень патологии (ближе к середине шкалы).
+                    
+                    ---
+                    
+                    **Где это происходит в коде:**
+                    
+                    В `scale/pca_scoring.py`, метод `transform()`:
+                    ```python
+                    # 1. Извлечение признаков
+                    X = df[feature_columns].fillna(0).values
+                    
+                    # 2. Стандартизация (используя параметры из обучения)
+                    X_scaled = self.scaler.transform(X)  # ← использует self.scaler.mean_ и self.scaler.scale_
+                    
+                    # 3. Вычисление PC1 (используя loadings из обучения)
+                    X_pca = self.pca.transform(X_scaled)  # ← использует self.pca.components_
+                    PC1 = X_pca[:, 0]  # Первая колонка = PC1 для каждого образца
+                    
+                    # 4. Нормализация
+                    PC1_norm = (PC1 - self.pc1_min) / (self.pc1_max - self.pc1_min)
+                    ```
+                    
+                    **Ключевой момент:** Все параметры (μ, σ, loadings, PC1_min, PC1_max) фиксируются при обучении (`fit()`) и используются для всех последующих WSI (`transform()`).
+                    
+                    ---
+                    
+                    ### Шаг 4: Интерпретация важности
+                    
+                    **Абсолютное значение loading** показывает важность признака:
+                    - **Большое абсолютное значение** (например, |0.27|) → признак сильно влияет на PC1
+                    - **Малое абсолютное значение** (например, |0.02|) → признак слабо влияет на PC1
+                    
+                    **Знак loading** показывает направление влияния:
+                    - **Положительный loading** (+0.27) → увеличение признака увеличивает PC1 → выше патология
+                    - **Отрицательный loading** (-0.15) → увеличение признака уменьшает PC1 → ниже патология (ближе к норме)
+                    
+                    ---
+                    
+                    ### Пример вычисления
+                    
+                    Предположим, у нас есть 3 признака с loadings:
+                    - `Mild_relative_count`: loading = +0.25
+                    - `Dysplasia_relative_area`: loading = +0.30
+                    - `Crypts_count`: loading = -0.10
+                    
+                    Для WSI со стандартизированными значениями:
+                    - `Mild_relative_count` = 1.5
+                    - `Dysplasia_relative_area` = 2.0
+                    - `Crypts_count` = -0.5
+                    
+                    PC1 вычисляется как:
+                    ```
+                    PC1 = (0.25 × 1.5) + (0.30 × 2.0) + (-0.10 × -0.5)
+                        = 0.375 + 0.60 + 0.05
+                        = 1.025
+                    ```
+                    
+                    Видно, что `Dysplasia_relative_area` дает наибольший вклад (0.60), так как у него:
+                    - Большой положительный loading (+0.30)
+                    - Высокое значение признака (2.0)
+                    
+                    ---
+                    
+                    ### Почему это работает?
+                    
+                    PCA автоматически находит оптимальные веса (loadings), которые:
+                    1. **Максимизируют дисперсию** - PC1 объясняет максимальную вариацию в данных
+                    2. **Лучше всего разделяют образцы** - образцы с разной патологией максимально различаются по PC1
+                    3. **Учитывают корреляции** - если признаки коррелируют, PCA это учитывает
+                    
+                    Поэтому loadings первой компоненты - это объективная мера важности признаков для разделения норма/патология.
+                    """)
                 
                 feature_importance = analyzer.get_feature_importance()
 
@@ -1514,6 +2212,454 @@ def render_dashboard():
                     - Значения из ноутбука (0.272) были на другом наборе образцов
                     - Текущие значения отражают важность признаков на ваших данных
                     """)
+                
+                # ============================================
+                # Секция кластеризации как дополнение к спектральному анализу
+                # ============================================
+                st.markdown("---")
+                st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
+                st.markdown("""
+                **Кластеризация дополняет спектральный анализ**, выявляя структуру данных и позволяя проецировать 
+                кластеры на единую спектральную шкалу через метод `spectrum_projection`.
+                
+                **Порядок работы:**
+                1. ✅ Спектральный анализ уже выполнен выше
+                2. Выполните кластеризацию ниже
+                3. Примените маппинг кластеров на спектральную шкалу
+                """)
+                
+                if len(df_features) > 0:
+                    # Информация о спектральном анализе и рекомендации
+                    has_spectral_analyzer = "analyzer" in st.session_state
+                    gmm_n_components = None
+                    spectral_pca_n_components = None
+                    
+                    if has_spectral_analyzer:
+                        analyzer = st.session_state.analyzer
+                        if analyzer.pca is not None:
+                            spectral_pca_n_components = analyzer.pca.n_components_ if hasattr(analyzer.pca, 'n_components_') else len(analyzer.pca.explained_variance_)
+                        if analyzer.gmm is not None:
+                            gmm_n_components = analyzer.gmm.n_components
+                        
+                        st.info(f"""
+                        ✅ **Используется PCA из спектрального анализа** ({spectral_pca_n_components} компонент)
+                        {"✅ **GMM компоненты:** " + str(gmm_n_components) + " (можно использовать как ориентир для числа кластеров)" if gmm_n_components else ""}
+                        """)
+                    
+                    # Объяснение взаимосвязи
+                    with st.expander("ℹ️ Понимание взаимосвязи: GMM компоненты, PCA компоненты и кластеры", expanded=False):
+                        st.markdown("""
+                        ### 🔬 Разница между компонентами:
+                        
+                        **1. PCA компоненты** (например, 30 компонент):
+                        - Это **направления максимальной вариации** в данных
+                        - Используются для **снижения размерности** (30 признаков → 30 PCA компонент)
+                        - **Одинаковые** для спектрального анализа и кластеризации (если используем один PCA)
+                        
+                        **2. GMM компоненты** (например, 2 компонента):
+                        - Это **стабильные состояния** (моды) в распределении PC1
+                        - Показывают, сколько **разных патологических состояний** обнаружено
+                        - **Не то же самое**, что кластеры!
+                        
+                        **3. Кластеры** (например, 3 кластера):
+                        - Это **группы похожих образцов** в пространстве признаков
+                        - Могут соответствовать GMM компонентам, но не обязательно
+                        - Зависят от метода кластеризации и параметров
+                        
+                        ### 💡 Рекомендации по выбору параметров:
+                        
+                        **Если GMM нашел 2 компонента:**
+                        - Можно попробовать **2 кластера** (соответствие GMM компонентам)
+                        - Или **3-4 кластера** (более детальная структура)
+                        - HDBSCAN сам определит оптимальное число
+                        
+                        **Число PCA компонент:**
+                        - Используйте **те же PCA компоненты**, что в спектральном анализе ✅
+                        - Можно ограничить до **10-15 компонент** для кластеризации (меньше шума)
+                        - Или использовать **все компоненты** (максимальная информация)
+                        
+                        **Почему обычно используют 10 компонент?**
+                        - **Первые компоненты** содержат большую часть информации (80-90% вариации)
+                        - **Последние компоненты** (20-30) содержат в основном шум и мелкие детали
+                        - **Компромисс:** больше компонент = больше информации, но и больше шума
+                        - **Для кластеризации:** обычно достаточно первых 10-15 компонент
+                        
+                        **Когда увеличить до 30?**
+                        - Если **Silhouette Score низкий** (< 0.4) - больше компонент может улучшить разделение
+                        - Если **много шума** (> 20%) - больше компонент может помочь найти структуру
+                        - Если **кластеры не интерпретируются** - больше информации может помочь
+                        - Если **данные сложные** - может потребоваться больше измерений
+                        
+                        **Риски увеличения до 30:**
+                        - Больше **шума** в последних компонентах может ухудшить кластеризацию
+                        - **Переобучение** - алгоритм может найти ложные паттерны
+                        - **Вычислительная сложность** - медленнее работа
+                        
+                        **Рекомендация:** Начните с 10, если метрики плохие - попробуйте 15-20, затем 30
+                        """)
+                    
+                    # Настройки кластеризации
+                    with st.expander("⚙️ Настройки кластеризации", expanded=False):
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            clustering_method = st.selectbox(
+                                "Метод кластеризации",
+                                ["hdbscan", "agglomerative", "kmeans"],
+                                help="HDBSCAN: автоматическое определение числа кластеров. Agglomerative/KMeans: требуется указать число кластеров.",
+                                key="clustering_method_spectral"
+                            )
+                        
+                        with col2:
+                            if clustering_method == "hdbscan":
+                                min_cluster_size = st.slider("Минимальный размер кластера", 2, 10, 2, key="min_cluster_size_spectral")
+                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
+                                n_clusters = None
+                            elif clustering_method == "agglomerative":
+                                # Рекомендация на основе GMM
+                                suggested_clusters = gmm_n_components if gmm_n_components else 3
+                                n_clusters = st.slider(
+                                    "Число кластеров", 
+                                    2, 10, 
+                                    suggested_clusters,
+                                    help=f"Рекомендация на основе GMM: {gmm_n_components} компонент" if gmm_n_components else None,
+                                    key="n_clusters_agglomerative_spectral"
+                                )
+                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
+                                min_cluster_size = None
+                            else:  # kmeans
+                                # Рекомендация на основе GMM
+                                suggested_clusters = gmm_n_components if gmm_n_components else 3
+                                n_clusters = st.slider(
+                                    "Число кластеров", 
+                                    2, 10, 
+                                    suggested_clusters,
+                                    help=f"Рекомендация на основе GMM: {gmm_n_components} компонент" if gmm_n_components else None,
+                                    key="n_clusters_kmeans_spectral"
+                                )
+                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
+                                min_cluster_size = None
+                        
+                        with col3:
+                            if use_pca_clustering:
+                                if has_spectral_analyzer and spectral_pca_n_components:
+                                    max_components = min(spectral_pca_n_components, 30)
+                                    default_components = min(10, spectral_pca_n_components)
+                                    
+                                    # Показываем объяснение выбора числа компонент
+                                    if spectral_pca_n_components > 10:
+                                        help_text = f"""Используются первые N компонент из {spectral_pca_n_components} компонент спектрального анализа.
+
+💡 Рекомендации:
+• 10 компонент (по умолчанию): первые компоненты содержат 80-90% информации, меньше шума
+• 15-20 компонент: если метрики кластеризации низкие, больше информации может помочь
+• 30 компонент: максимум информации, но последние компоненты могут содержать шум
+
+Почему не все 30? Последние компоненты PCA обычно содержат шум и могут ухудшить кластеризацию."""
+                                    else:
+                                        help_text = f"Используются первые N компонент из {spectral_pca_n_components} компонент спектрального анализа"
+                                    
+                                    pca_components_clustering = st.slider(
+                                        f"Число компонент PCA (доступно: {spectral_pca_n_components})", 
+                                        2, max_components, 
+                                        default_components,
+                                        help=help_text,
+                                        key="pca_components_clustering_spectral"
+                                    )
+                                    
+                                    # Показываем объяснение выбора
+                                    if pca_components_clustering < 15:
+                                        st.caption(f"✅ Используется {pca_components_clustering} компонент - оптимальный баланс между информацией и шумом")
+                                    elif pca_components_clustering < 25:
+                                        st.caption(f"ℹ️ Используется {pca_components_clustering} компонент - больше информации, но может быть больше шума")
+                                    else:
+                                        st.caption(f"⚠️ Используется {pca_components_clustering} компонент - максимум информации, но последние компоненты могут содержать шум")
+                                else:
+                                    pca_components_clustering = st.slider("Число компонент PCA", 2, 20, 10, key="pca_components_clustering_spectral")
+                            else:
+                                pca_components_clustering = None
+                    
+                    # Запуск кластеризации
+                    if st.button("🚀 Запустить кластеризацию", type="primary", key="run_clustering_spectral"):
+                        with st.spinner("Выполняется кластеризация..."):
+                            try:
+                                clusterer = clustering.ClusterAnalyzer(
+                                    method=clustering_method,
+                                    n_clusters=n_clusters,
+                                    random_state=42,
+                                )
+                                
+                                # Передаем PCA и scaler из спектрального анализа, если доступны
+                                fit_kwargs = {
+                                    "use_pca": use_pca_clustering,
+                                    "pca_components": pca_components_clustering if use_pca_clustering else None,
+                                    "min_cluster_size": min_cluster_size if clustering_method == "hdbscan" else 2,
+                                }
+                                
+                                if has_spectral_analyzer and use_pca_clustering:
+                                    fit_kwargs["external_pca"] = analyzer.pca
+                                    fit_kwargs["external_scaler"] = analyzer.scaler
+                                    st.info(f"✅ Используется PCA из спектрального анализа ({spectral_pca_n_components} компонент, используется {pca_components_clustering})")
+                                
+                                clusterer.fit(df_features, **fit_kwargs)
+                                
+                                # Сохраняем в session state
+                                st.session_state.clusterer = clusterer
+                                
+                                st.success("✅ Кластеризация завершена!")
+                                
+                            except Exception as e:
+                                st.error(f"Ошибка при кластеризации: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                    
+                    # Отображение результатов кластеризации
+                    if "clusterer" in st.session_state:
+                        clusterer = st.session_state.clusterer
+                        
+                        # Метрики
+                        st.markdown("#### 📊 Метрики качества кластеризации")
+                        metrics = clusterer.get_metrics(df_features)
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Число кластеров", metrics["n_clusters"])
+                        with col2:
+                            noise_count = metrics["n_noise"]
+                            total_samples = metrics.get("n_samples", noise_count + metrics["n_clusters"] * 10)
+                            noise_percent = (noise_count / total_samples * 100) if total_samples > 0 else 0
+                            st.metric("Шум (outliers)", f"{noise_count} ({noise_percent:.1f}%)")
+                        with col3:
+                            if not np.isnan(metrics.get("silhouette_score", np.nan)):
+                                silhouette = metrics['silhouette_score']
+                                st.metric("Silhouette Score", f"{silhouette:.3f}")
+                            else:
+                                st.metric("Silhouette Score", "N/A")
+                        with col4:
+                            if not np.isnan(metrics.get("calinski_harabasz_score", np.nan)):
+                                ch_score = metrics['calinski_harabasz_score']
+                                st.metric("Calinski-Harabasz", f"{ch_score:.1f}")
+                            else:
+                                st.metric("Calinski-Harabasz", "N/A")
+                        
+                        # Интерпретация метрик и рекомендации
+                        with st.expander("📊 Интерпретация метрик и рекомендации", expanded=True):
+                            silhouette = metrics.get("silhouette_score", np.nan)
+                            ch_score = metrics.get("calinski_harabasz_score", np.nan)
+                            n_clusters = metrics["n_clusters"]
+                            n_noise = metrics["n_noise"]
+                            n_samples = metrics.get("n_samples", n_noise + n_clusters * 10)
+                            noise_percent = (n_noise / n_samples * 100) if n_samples > 0 else 0
+                            
+                            # Оценка Silhouette Score
+                            if not np.isnan(silhouette):
+                                if silhouette < 0.25:
+                                    silhouette_status = "🔴 Слабое разделение"
+                                    silhouette_advice = "Кластеры плохо разделены. Попробуйте увеличить число PCA компонент или изменить метод кластеризации."
+                                elif silhouette < 0.5:
+                                    silhouette_status = "🟡 Приемлемое разделение"
+                                    silhouette_advice = "Кластеры разделены приемлемо. Можно улучшить, увеличив число PCA компонент или изменив параметры."
+                                elif silhouette < 0.7:
+                                    silhouette_status = "🟢 Хорошее разделение"
+                                    silhouette_advice = "Кластеры хорошо разделены. Результат хороший!"
+                                else:
+                                    silhouette_status = "🟢 Отличное разделение"
+                                    silhouette_advice = "Отличное разделение кластеров!"
+                                
+                                st.markdown(f"**Silhouette Score ({silhouette:.3f}):** {silhouette_status}")
+                                st.caption(silhouette_advice)
+                            
+                            # Оценка шума
+                            if noise_percent > 30:
+                                noise_status = "🔴 Слишком много шума"
+                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - это много. Попробуйте уменьшить `min_cluster_size` или увеличить число PCA компонент."
+                            elif noise_percent > 15:
+                                noise_status = "🟡 Много шума"
+                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных. Можно попробовать уменьшить `min_cluster_size` или использовать другой метод кластеризации."
+                            elif noise_percent > 5:
+                                noise_status = "🟡 Умеренный шум"
+                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - это нормально для HDBSCAN."
+                            else:
+                                noise_status = "🟢 Мало шума"
+                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - отлично!"
+                            
+                            st.markdown(f"**Шум (outliers):** {noise_status} ({n_noise} образцов, {noise_percent:.1f}%)")
+                            st.caption(noise_advice)
+                            
+                            # Общие рекомендации
+                            st.markdown("---")
+                            st.markdown("**💡 Рекомендации по улучшению:**")
+                            recommendations = []
+                            
+                            if not np.isnan(silhouette) and silhouette < 0.5:
+                                recommendations.append("• Увеличьте число PCA компонент (попробуйте 15-20 вместо 10)")
+                                recommendations.append("• Попробуйте другой метод кластеризации (Agglomerative или KMeans с фиксированным числом кластеров)")
+                            
+                            if noise_percent > 15:
+                                recommendations.append("• Уменьшите `min_cluster_size` (попробуйте 2-3)")
+                                recommendations.append("• Увеличьте число PCA компонент для лучшего разделения")
+                            
+                            if n_clusters == 2 and has_spectral_analyzer and gmm_n_components:
+                                if gmm_n_components != 2:
+                                    recommendations.append(f"• GMM нашел {gmm_n_components} компонент, попробуйте Agglomerative/KMeans с {gmm_n_components} кластерами")
+                            
+                            if not recommendations:
+                                recommendations.append("• Результаты выглядят хорошо! Можно применить маппинг на score.")
+                            
+                            for rec in recommendations:
+                                st.markdown(rec)
+                            
+                            # Предупреждение о структуре данных
+                            if not np.isnan(silhouette) and silhouette < 0.3 and noise_percent > 20:
+                                st.warning("⚠️ **Возможная проблема:** Данные могут не иметь четкой кластерной структуры. Это нормально для биомедицинских данных - кластеризация все равно может быть полезна для группировки похожих образцов.")
+                        
+                        # Маппинг кластеров на спектральную шкалу
+                        st.markdown("#### 🎯 Маппинг кластеров на спектральную шкалу")
+                        st.info("✅ Используйте интегрированный метод 'spectrum_projection' для проецирования кластеров на единую спектральную шкалу.")
+                        
+                        # Выбор метода маппинга
+                        scoring_methods = ["spectrum_projection", "pathology_features", "pc1_centroid", "distance_from_normal"]
+                        
+                        scoring_method = st.selectbox(
+                            "Метод маппинга кластеров на score",
+                            scoring_methods,
+                            help="spectrum_projection: интегрированный подход со спектральным анализом (единая шкала, моды, процентили)",
+                            key="scoring_method_spectral"
+                        )
+                        
+                        if st.button("🎯 Применить маппинг на score", type="primary", key="apply_scoring_spectral"):
+                            with st.spinner("Выполняется маппинг кластеров на score..."):
+                                try:
+                                    scorer = cluster_scoring.ClusterScorer(
+                                        method=scoring_method,
+                                        use_percentiles=True,
+                                        percentile_low=1.0,
+                                        percentile_high=99.0
+                                    )
+                                    
+                                    # Передаем spectral_analyzer если используется spectrum_projection
+                                    kwargs = {}
+                                    if scoring_method == "spectrum_projection":
+                                        kwargs["spectral_analyzer"] = analyzer
+                                        kwargs["use_cluster_distribution"] = True
+                                    
+                                    df_with_scores = scorer.fit_transform(
+                                        df_features,
+                                        clusterer=clusterer,
+                                        **kwargs
+                                    )
+                                    
+                                    # Сохраняем scorer в session state
+                                    st.session_state.cluster_scorer = scorer
+                                    st.session_state.df_with_cluster_scores = df_with_scores
+                                    
+                                    st.success("✅ Маппинг кластеров на score завершен!")
+                                    
+                                    # Показываем информацию о маппинге
+                                    cluster_scores = scorer.get_cluster_scores()
+                                    st.markdown("**Маппинг кластеров на score:**")
+                                    st.dataframe(
+                                        pd.DataFrame({
+                                            "Кластер": cluster_scores.index,
+                                            "Score [0-1]": cluster_scores.values
+                                        }),
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+                                    
+                                    # Если используется spectrum_projection, показываем дополнительную информацию
+                                    if scoring_method == "spectrum_projection":
+                                        cluster_modes = scorer.get_cluster_modes()
+                                        if cluster_modes:
+                                            st.markdown("**Классификация кластеров по модам:**")
+                                            modes_df = pd.DataFrame({
+                                                "Кластер": list(cluster_modes.keys()),
+                                                "Мода": list(cluster_modes.values())
+                                            })
+                                            st.dataframe(modes_df, use_container_width=True, hide_index=True)
+                                        
+                                        cluster_distributions = scorer.get_cluster_distributions()
+                                        if cluster_distributions:
+                                            with st.expander("📊 Распределения внутри кластеров"):
+                                                dist_data = []
+                                                for cluster_id, dist in cluster_distributions.items():
+                                                    dist_data.append({
+                                                        "Кластер": cluster_id,
+                                                        "Медиана PC1": f"{dist['median']:.3f}",
+                                                        "Среднее PC1": f"{dist['mean']:.3f}",
+                                                        "P25": f"{dist['p25']:.3f}",
+                                                        "P75": f"{dist['p75']:.3f}",
+                                                        "Std": f"{dist['std']:.3f}",
+                                                        "Число образцов": dist['count']
+                                                    })
+                                                st.dataframe(pd.DataFrame(dist_data), use_container_width=True, hide_index=True)
+                                    
+                                    # Таблица с результатами
+                                    st.markdown("#### 📋 Результаты кластеризации с маппингом")
+                                    df_with_clusters = df_with_scores.copy()
+                                    
+                                    # Показываем распределение по кластерам
+                                    cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
+                                    cluster_info = pd.DataFrame({
+                                        "Кластер": cluster_counts.index,
+                                        "Число образцов": cluster_counts.values
+                                    })
+                                    
+                                    # Добавляем score и моды если есть
+                                    if "cluster_score" in df_with_clusters.columns:
+                                        cluster_scores_map = df_with_clusters.groupby("cluster")["cluster_score"].first()
+                                        cluster_info["Score"] = cluster_info["Кластер"].map(cluster_scores_map).round(3)
+                                    
+                                    if "cluster_mode" in df_with_clusters.columns:
+                                        cluster_modes_map = df_with_clusters.groupby("cluster")["cluster_mode"].first()
+                                        cluster_info["Мода"] = cluster_info["Кластер"].map(cluster_modes_map)
+                                    
+                                    st.dataframe(cluster_info, use_container_width=True, hide_index=True)
+                                    
+                                    # Таблица с образцами
+                                    display_cols = ["image", "cluster"]
+                                    if "cluster_score" in df_with_clusters.columns:
+                                        display_cols.append("cluster_score")
+                                    if "cluster_mode" in df_with_clusters.columns:
+                                        display_cols.append("cluster_mode")
+                                    if "PC1" in df_with_clusters.columns:
+                                        display_cols.append("PC1")
+                                    if "PC1_spectrum" in df_with_clusters.columns:
+                                        display_cols.append("PC1_spectrum")
+                                    
+                                    st.dataframe(
+                                        df_with_clusters[display_cols].sort_values("cluster"),
+                                        use_container_width=True,
+                                        hide_index=True
+                                    )
+                                    
+                                    # Скачивание результатов
+                                    csv_clusters = df_with_clusters.to_csv(index=False)
+                                    st.download_button(
+                                        label="📥 Скачать результаты кластеризации (CSV)",
+                                        data=csv_clusters,
+                                        file_name=f"clustering_spectral_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                        mime="text/csv",
+                                        key="download_clustering_spectral"
+                                    )
+                                    
+                                except Exception as e:
+                                    st.error(f"Ошибка при маппинге: {e}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
+                        else:
+                            # Показываем базовую информацию о кластерах без маппинга
+                            df_with_clusters = clusterer.transform(df_features)
+                            cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
+                            st.markdown("**Распределение по кластерам:**")
+                            st.dataframe(
+                                pd.DataFrame({
+                                    "Кластер": cluster_counts.index,
+                                    "Число образцов": cluster_counts.values
+                                }),
+                                use_container_width=True,
+                                hide_index=True
+                            )
 
             else:
                 st.info("Включите спектральный анализ в настройках")
@@ -1594,28 +2740,57 @@ def render_dashboard():
                         if high_z_features:
                             st.info(f"⚠️ Обнаружены признаки с большими отклонениями (|Z-score| > 2): {', '.join(high_z_features[:5])}")
                             
-                            # Мультиселект для быстрого исключения
-                            features_to_exclude = st.multiselect(
-                                "Выберите признаки для исключения",
-                                numeric_cols,
-                                default=high_z_features[:3],  # По умолчанию предлагаем топ-3 с наибольшими отклонениями
-                                key=f"exclude_{selected_sample}",
-                                help="Эти признаки будут исключены из PCA анализа. Обновите страницу после выбора."
-                            )
+                            # Инициализируем session_state для исключенных признаков
+                            exclude_key = f"exclude_features_{selected_sample}"
+                            if exclude_key not in st.session_state:
+                                st.session_state[exclude_key] = high_z_features[:3]
                             
-                            if features_to_exclude:
+                            # Фильтруем сохраненные значения, чтобы они были только из доступных опций
+                            saved_excluded = st.session_state[exclude_key]
+                            valid_excluded_default = [f for f in saved_excluded if f in numeric_cols]
+                            if not valid_excluded_default and high_z_features:
+                                valid_excluded_default = high_z_features[:3]
+                                st.session_state[exclude_key] = valid_excluded_default
+                            
+                            st.info("💡 Выберите признаки, затем нажмите кнопку 'Применить исключение'.")
+                            
+                            with st.form(f"exclude_features_form_{selected_sample}", clear_on_submit=False):
+                                # Мультиселект для быстрого исключения
+                                features_to_exclude = st.multiselect(
+                                    "Выберите признаки для исключения",
+                                    numeric_cols,
+                                    default=valid_excluded_default,
+                                    key=f"exclude_{selected_sample}_form",
+                                    help="Эти признаки будут исключены из PCA анализа."
+                                )
+                                
+                                submitted = st.form_submit_button("✅ Применить исключение", use_container_width=True)
+                                if submitted:
+                                    st.session_state[exclude_key] = features_to_exclude
+                                    # Сохраняем в общий список исключенных признаков
+                                    if "excluded_features" not in st.session_state:
+                                        st.session_state.excluded_features = []
+                                    # Объединяем с существующими исключениями
+                                    current_excluded = set(st.session_state.excluded_features)
+                                    current_excluded.update(features_to_exclude)
+                                    st.session_state.excluded_features = list(current_excluded)
+                                    st.session_state.selection_mode = "Исключить признаки (blacklist)"
+                                    st.success(f"✅ Признаки сохранены! Перейдите в раздел '🎯 Выбор признаков' для применения.")
+                            
+                            # Показываем текущий статус
+                            if st.session_state[exclude_key]:
                                 st.warning(
-                                    f"⚠️ Выбрано {len(features_to_exclude)} признаков для исключения: {', '.join(features_to_exclude)}\n\n"
+                                    f"⚠️ Выбрано {len(st.session_state[exclude_key])} признаков для исключения: {', '.join(st.session_state[exclude_key][:5])}{'...' if len(st.session_state[exclude_key]) > 5 else ''}\n\n"
                                     f"**Чтобы применить исключение:**\n"
-                                    f"1. Перейдите в раздел '🎯 Выбор признаков' в боковой панели\n"
-                                    f"2. Выберите эти же признаки там\n"
-                                    f"3. Данные пересчитаются автоматически"
+                                    f"1. Нажмите кнопку 'Применить исключение' выше\n"
+                                    f"2. Перейдите в раздел '🎯 Выбор признаков' в боковой панели\n"
+                                    f"3. Нажмите кнопку 'Обновить' там для применения изменений"
                                 )
                                 
                                 # Сохраняем в session state для удобства
                                 if "suggested_exclusions" not in st.session_state:
                                     st.session_state.suggested_exclusions = []
-                                st.session_state.suggested_exclusions = features_to_exclude
+                                st.session_state.suggested_exclusions = st.session_state[exclude_key]
                     
                     # Если есть результаты спектрального анализа
                     if "analyzer" in st.session_state and use_spectral_analysis:
@@ -2089,500 +3264,6 @@ def render_dashboard():
                         import traceback
                         st.code(traceback.format_exc())
 
-        # Вкладка кластеризации
-        with tab_clustering:
-            st.header("🔗 Кластеризация данных")
-            st.markdown("Выявление скрытых паттернов и патологических фенотипов через кластеризацию.")
-            
-            if len(df_features) > 0:
-                # Настройки кластеризации
-                st.subheader("⚙️ Настройки кластеризации")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    clustering_method = st.selectbox(
-                        "Метод кластеризации",
-                        ["hdbscan", "agglomerative", "kmeans"],
-                        help="HDBSCAN: автоматическое определение числа кластеров. Agglomerative/KMeans: требуется указать число кластеров."
-                    )
-                
-                with col2:
-                    if clustering_method == "hdbscan":
-                        min_cluster_size = st.slider("Минимальный размер кластера", 2, 10, 2)
-                        use_pca = st.checkbox("Использовать PCA", value=True)
-                        n_clusters = None
-                    elif clustering_method == "agglomerative":
-                        n_clusters = st.slider("Число кластеров", 2, 10, 3)
-                        use_pca = st.checkbox("Использовать PCA", value=True)
-                        min_cluster_size = None
-                    else:  # kmeans
-                        n_clusters = st.slider("Число кластеров", 2, 10, 3)
-                        use_pca = st.checkbox("Использовать PCA", value=True)
-                        min_cluster_size = None
-                
-                with col3:
-                    if use_pca:
-                        pca_components = st.slider("Число компонент PCA", 2, 20, 10)
-                    else:
-                        pca_components = None
-                
-                # Запуск кластеризации
-                if st.button("🚀 Запустить кластеризацию", type="primary"):
-                    with st.spinner("Выполняется кластеризация..."):
-                        try:
-                            clusterer = clustering.ClusterAnalyzer(
-                                method=clustering_method,
-                                n_clusters=n_clusters,
-                                random_state=42,
-                            )
-                            
-                            clusterer.fit(
-                                df_features,
-                                use_pca=use_pca,
-                                pca_components=pca_components if use_pca else None,
-                                min_cluster_size=min_cluster_size if clustering_method == "hdbscan" else 2,
-                            )
-                            
-                            # Сохраняем в session state
-                            st.session_state.clusterer = clusterer
-                            
-                            st.success("✅ Кластеризация завершена!")
-                            
-                        except Exception as e:
-                            st.error(f"Ошибка при кластеризации: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
-                
-                # Отображение результатов
-                if "clusterer" in st.session_state:
-                    clusterer = st.session_state.clusterer
-                    
-                    # Метрики
-                    st.subheader("📊 Метрики качества кластеризации")
-                    metrics = clusterer.get_metrics(df_features)
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Число кластеров", metrics["n_clusters"])
-                    with col2:
-                        st.metric("Шум (outliers)", metrics["n_noise"])
-                    with col3:
-                        if not np.isnan(metrics.get("silhouette_score", np.nan)):
-                            st.metric("Silhouette Score", f"{metrics['silhouette_score']:.3f}")
-                        else:
-                            st.metric("Silhouette Score", "N/A")
-                    with col4:
-                        if not np.isnan(metrics.get("calinski_harabasz_score", np.nan)):
-                            st.metric("Calinski-Harabasz", f"{metrics['calinski_harabasz_score']:.1f}")
-                        else:
-                            st.metric("Calinski-Harabasz", "N/A")
-                    
-                    # Интерпретация кластеров
-                    st.subheader("🔍 Интерпретация кластеров")
-                    interpretation = clusterer.get_cluster_interpretation()
-                    
-                    if interpretation:
-                        for cluster_id, info in interpretation.items():
-                            with st.expander(f"Кластер {cluster_id} ({info['n_samples']} образцов)"):
-                                st.markdown(f"**Интерпретация:** {info['interpretation']}")
-                                st.markdown(f"**Топ признаки:** {info['features_str']}")
-                                
-                                # Показываем средние значения признаков
-                                if clusterer.cluster_stats_:
-                                    cluster_means = clusterer.cluster_stats_["means"].loc[cluster_id]
-                                    top_features = cluster_means.nlargest(10)
-                                    st.dataframe(
-                                        pd.DataFrame({
-                                            "Признак": top_features.index,
-                                            "Среднее значение": top_features.values
-                                        }),
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
-                    else:
-                        st.warning("Не удалось интерпретировать кластеры")
-                    
-                    # Визуализация
-                    st.subheader("📈 Визуализация кластеров")
-                    
-                    # UMAP визуализация
-                    if st.checkbox("Показать UMAP визуализацию", value=True):
-                        with st.spinner("Обучение UMAP..."):
-                            try:
-                                clusterer.fit_umap(df_features, n_neighbors=5, min_dist=0.1)
-                                
-                                import tempfile
-                                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                                    tmp_path = Path(tmp_file.name)
-                                
-                                clusterer.visualize_clusters(df_features, save_path=tmp_path)
-                                
-                                if tmp_path.exists():
-                                    st.image(str(tmp_path))
-                                    tmp_path.unlink()
-                            except Exception as e:
-                                st.error(f"Ошибка при визуализации: {e}")
-                    
-                    # Таблица с результатами
-                    st.subheader("📋 Результаты кластеризации")
-                    df_with_clusters = clusterer.transform(df_features)
-                    
-                    # Показываем распределение по кластерам
-                    cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
-                    st.markdown("**Распределение по кластерам:**")
-                    st.dataframe(
-                        pd.DataFrame({
-                            "Кластер": cluster_counts.index,
-                            "Число образцов": cluster_counts.values
-                        }),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Таблица с образцами
-                    display_cols = ["image", "cluster"]
-                    if "PC1" in df_with_clusters.columns:
-                        display_cols.append("PC1")
-                    if "PC1_spectrum" in df_with_clusters.columns:
-                        display_cols.append("PC1_spectrum")
-                    
-                    st.dataframe(
-                        df_with_clusters[display_cols].sort_values("cluster"),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Сохранение и скачивание результатов
-                    st.subheader("💾 Сохранение кластеризатора")
-                    
-                    clusterer_name = st.text_input(
-                        "Имя для сохранения кластеризатора",
-                        value=f"clusterer_{clustering_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                        help="Имя файла (без расширения .pkl)"
-                    )
-                    
-                    if st.button("💾 Сохранить кластеризатор"):
-                        models_dir = Path("models")
-                        models_dir.mkdir(exist_ok=True)
-                        
-                        save_path = models_dir / f"{clusterer_name}.pkl"
-                        try:
-                            clusterer.save(save_path)
-                            st.success(f"✅ Кластеризатор сохранен: {save_path}")
-                        except Exception as e:
-                            st.error(f"Ошибка при сохранении: {e}")
-                    
-                    # Скачивание результатов
-                    csv_clusters = df_with_clusters.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Скачать результаты кластеризации (CSV)",
-                        data=csv_clusters,
-                        file_name=f"clustering_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
-                    )
-            else:
-                st.info("Загрузите данные для кластеризации")
-        
-        # Вкладка сравнения кластеризаций
-        with tab_compare:
-            st.header("⚖️ Сравнение сохраненных кластеризаций")
-            st.markdown("Загрузите несколько сохраненных кластеризаций и сравните их результаты, включая маппинг на шкалу 0-1.")
-            
-            if len(df_features) > 0:
-                # Поиск сохраненных кластеризаторов
-                models_dir = Path("models")
-                saved_clusterers = []
-                
-                if models_dir.exists():
-                    saved_clusterers = list(models_dir.glob("clusterer*.pkl"))
-                
-                if not saved_clusterers:
-                    st.warning("⚠️ Не найдено сохраненных кластеризаторов в директории `models/`")
-                    st.info("💡 Сначала сохраните кластеризаторы через вкладку '🔗 Кластеризация'")
-                else:
-                    st.success(f"✅ Найдено {len(saved_clusterers)} сохраненных кластеризаторов")
-                    
-                    # Выбор кластеризаторов для сравнения
-                    st.subheader("📁 Выбор кластеризаторов для сравнения")
-                    
-                    clusterer_names = [f.stem for f in saved_clusterers]
-                    selected_names = st.multiselect(
-                        "Выберите кластеризаторы для сравнения (минимум 2)",
-                        clusterer_names,
-                        default=clusterer_names[:min(3, len(clusterer_names))],
-                        help="Выберите минимум 2 кластеризатора для сравнения"
-                    )
-                    
-                    if len(selected_names) >= 2:
-                        # Загрузка кластеризаторов
-                        if st.button("🔄 Загрузить и сравнить", type="primary"):
-                            with st.spinner("Загрузка кластеризаторов..."):
-                                try:
-                                    comparison = cluster_comparison.ClusterComparison()
-                                    
-                                    clusterer_paths = {
-                                        name: str(models_dir / f"{name}.pkl")
-                                        for name in selected_names
-                                    }
-                                    
-                                    comparison.load_multiple_clusterers(clusterer_paths, df_features)
-                                    
-                                    st.session_state.cluster_comparison = comparison
-                                    st.success(f"✅ Загружено {len(comparison.clusterers)} кластеризаторов")
-                                    
-                                except Exception as e:
-                                    st.error(f"Ошибка при загрузке: {e}")
-                                    import traceback
-                                    st.code(traceback.format_exc())
-                        
-                        # Отображение результатов сравнения
-                        if "cluster_comparison" in st.session_state:
-                            comparison = st.session_state.cluster_comparison
-                            
-                            # Рекомендация лучшего кластеризатора
-                            st.subheader("🏆 Рекомендация лучшего кластеризатора")
-                            
-                            criteria = st.selectbox(
-                                "Критерий выбора",
-                                ["silhouette", "calinski_harabasz", "davies_bouldin", "composite"],
-                                help="silhouette: максимизировать разделение кластеров. calinski_harabasz: максимизировать разделение. davies_bouldin: минимизировать перекрытие. composite: комбинация всех метрик."
-                            )
-                            
-                            if st.button("🎯 Найти лучший кластеризатор"):
-                                with st.spinner("Анализ метрик..."):
-                                    try:
-                                        recommendation = comparison.recommend_best(criteria=criteria)
-                                        
-                                        if recommendation["best"]:
-                                            st.success(f"✅ **Рекомендуемый кластеризатор: {recommendation['best']}**")
-                                            st.info(f"💡 {recommendation['reason']}")
-                                            
-                                            # Сохраняем рекомендацию
-                                            st.session_state.best_clusterer = recommendation["best"]
-                                            st.session_state.recommendation = recommendation
-                                            
-                                            # Показываем ранжирование
-                                            if recommendation["scores"]:
-                                                st.markdown("**Ранжирование всех кластеризаторов:**")
-                                                ranking_data = []
-                                                for name, score_info in recommendation["scores"].items():
-                                                    ranking_data.append({
-                                                        "Кластеризатор": name,
-                                                        "Ранг": score_info.get("rank", "N/A"),
-                                                        "Score": f"{score_info.get('composite', score_info.get('silhouette', score_info.get('calinski_harabasz', score_info.get('davies_bouldin', 'N/A')))):.4f}" if isinstance(score_info.get('composite', score_info.get('silhouette', score_info.get('calinski_harabasz', score_info.get('davies_bouldin')))), (int, float)) else "N/A"
-                                                    })
-                                                st.dataframe(pd.DataFrame(ranking_data).sort_values("Ранг"), use_container_width=True, hide_index=True)
-                                        else:
-                                            st.warning("⚠️ Не удалось определить лучший кластеризатор")
-                                    except Exception as e:
-                                        st.error(f"Ошибка при анализе: {e}")
-                            
-                            # Показываем сохраненную рекомендацию
-                            if "best_clusterer" in st.session_state:
-                                st.info(f"💾 Текущая рекомендация: **{st.session_state.best_clusterer}**")
-                            
-                            # Метрики
-                            st.subheader("📊 Метрики качества")
-                            
-                            with st.expander("ℹ️ Как интерпретировать метрики?"):
-                                st.markdown("""
-                                **Silhouette Score (-1 до 1):**
-                                - Чем выше, тем лучше разделены кластеры
-                                - > 0.5: хорошее разделение
-                                - > 0.7: отличное разделение
-                                
-                                **Calinski-Harabasz Score:**
-                                - Чем выше, тем лучше разделение кластеров
-                                - Показывает отношение межкластерной дисперсии к внутрикластерной
-                                
-                                **Davies-Bouldin Score:**
-                                - Чем ниже, тем лучше разделение
-                                - Показывает среднее "сходство" между кластерами
-                                - < 1.0: хорошее разделение
-                                
-                                **Число кластеров:**
-                                - Оптимальное число зависит от данных
-                                - Слишком много: переобучение
-                                - Слишком мало: потеря информации
-                                
-                                **Шум (outliers):**
-                                - Только для HDBSCAN
-                                - Образцы, не попавшие ни в один кластер
-                                - Много шума может указывать на проблемы с параметрами
-                                """)
-                            
-                            metrics_df = comparison.compare_metrics()
-                            st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-                            
-                            # Распределение по кластерам
-                            st.subheader("📈 Распределение по кластерам")
-                            dist_df = comparison.compare_cluster_distributions()
-                            st.dataframe(dist_df, use_container_width=True, hide_index=True)
-                            
-                            # Маппинг на шкалу
-                            st.subheader("🎯 Маппинг кластеров на шкалу 0-1")
-                            
-                            scoring_method = st.selectbox(
-                                "Метод маппинга",
-                                ["pathology_features", "pc1_centroid", "distance_from_normal"],
-                                help="pathology_features: на основе суммы патологических признаков. pc1_centroid: на основе PC1 центроида. distance_from_normal: на основе расстояния от нормального кластера."
-                            )
-                            
-                            if st.button("🔄 Применить маппинг", type="primary"):
-                                with st.spinner("Применение маппинга..."):
-                                    try:
-                                        comparison.apply_scoring(scoring_method=scoring_method)
-                                        st.success("✅ Маппинг применен!")
-                                    except Exception as e:
-                                        st.error(f"Ошибка при маппинге: {e}")
-                            
-                            # Сравнение scores
-                            if comparison.scores:
-                                st.subheader("📊 Сравнение cluster_score")
-                                
-                                scores_df = comparison.compare_scores()
-                                st.dataframe(scores_df, use_container_width=True, hide_index=True)
-                                
-                                # Статистика
-                                st.markdown("**Статистика cluster_score:**")
-                                stats_rows = []
-                                for name, df_scores in comparison.scores.items():
-                                    scores = df_scores["cluster_score"].dropna()
-                                    stats_rows.append({
-                                        "Кластеризация": name,
-                                        "Mean": f"{scores.mean():.3f}",
-                                        "Std": f"{scores.std():.3f}",
-                                        "Min": f"{scores.min():.3f}",
-                                        "Max": f"{scores.max():.3f}",
-                                        "Median": f"{scores.median():.3f}",
-                                    })
-                                st.dataframe(pd.DataFrame(stats_rows), use_container_width=True, hide_index=True)
-                                
-                                # Визуализация
-                                st.subheader("📈 Визуализация сравнения")
-                                
-                                if st.button("📊 Создать графики сравнения"):
-                                    with st.spinner("Создание графиков..."):
-                                        try:
-                                            import tempfile
-                                            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                                                tmp_path = Path(tmp_file.name)
-                                            
-                                            comparison.visualize_comparison(save_path=tmp_path)
-                                            
-                                            if tmp_path.exists():
-                                                st.image(str(tmp_path))
-                                                
-                                                # Кнопка скачивания
-                                                with open(tmp_path, "rb") as f:
-                                                    st.download_button(
-                                                        label="📥 Скачать график",
-                                                        data=f.read(),
-                                                        file_name=f"cluster_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
-                                                        mime="image/png"
-                                                    )
-                                                
-                                                tmp_path.unlink()
-                                        except Exception as e:
-                                            st.error(f"Ошибка при визуализации: {e}")
-                                
-                                # Использование лучшей шкалы
-                                st.subheader("🚀 Использование лучшей шкалы")
-                                
-                                if "best_clusterer" in st.session_state:
-                                    best_name = st.session_state.best_clusterer
-                                    
-                                    st.success(f"✅ Используется лучший кластеризатор: **{best_name}**")
-                                    
-                                    # Показываем scores для лучшего кластеризатора
-                                    if best_name in comparison.scores:
-                                        best_scores = comparison.scores[best_name]
-                                        
-                                        st.markdown("**Cluster scores для всех образцов:**")
-                                        display_df = best_scores[["image", "cluster", "cluster_score"]].copy()
-                                        display_df = display_df.sort_values("cluster_score", ascending=False)
-                                        st.dataframe(display_df, use_container_width=True, hide_index=True)
-                                        
-                                        # Статистика
-                                        scores_values = best_scores["cluster_score"].dropna()
-                                        col1, col2, col3, col4 = st.columns(4)
-                                        with col1:
-                                            st.metric("Mean Score", f"{scores_values.mean():.3f}")
-                                        with col2:
-                                            st.metric("Std Score", f"{scores_values.std():.3f}")
-                                        with col3:
-                                            st.metric("Min Score", f"{scores_values.min():.3f}")
-                                        with col4:
-                                            st.metric("Max Score", f"{scores_values.max():.3f}")
-                                        
-                                        # Интерпретация шкалы
-                                        with st.expander("💡 Как использовать cluster_score?"):
-                                            st.markdown(f"""
-                                            **Шкала патологии (0-1) для кластеризатора {best_name}:**
-                                            
-                                            - **0.0 - 0.3**: Нормальные/здоровые образцы
-                                            - **0.3 - 0.6**: Легкая патология
-                                            - **0.6 - 0.8**: Умеренная патология
-                                            - **0.8 - 1.0**: Тяжелая патология
-                                            
-                                            **Применение к новым данным:**
-                                            1. Загрузите новые JSON файлы с предсказаниями
-                                            2. Перейдите на вкладку "🔗 Кластеризация"
-                                            3. Загрузите сохраненный кластеризатор `{best_name}.pkl`
-                                            4. Примените `transform()` для получения cluster labels
-                                            5. Используйте сохраненный ClusterScorer для получения cluster_score
-                                            
-                                            **Программное использование:**
-                                            ```python
-                                            from scale import clustering, cluster_scoring
-                                            
-                                            # Загрузка лучшего кластеризатора
-                                            clusterer = clustering.ClusterAnalyzer.load("models/{best_name}.pkl")
-                                            
-                                            # Применение к новым данным
-                                            df_with_clusters = clusterer.transform(df_new_data)
-                                            
-                                            # Маппинг на шкалу (если scorer сохранен)
-                                            scorer = cluster_scoring.ClusterScorer.load("models/scorer_{best_name}.pkl")
-                                            df_with_scores = scorer.transform(df_with_clusters)
-                                            ```
-                                            """)
-                                        
-                                        # Скачивание лучшей шкалы
-                                        csv_best = display_df.to_csv(index=False)
-                                        st.download_button(
-                                            label=f"📥 Скачать scores лучшего кластеризатора ({best_name})",
-                                            data=csv_best,
-                                            file_name=f"best_cluster_scores_{best_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                            mime="text/csv"
-                                        )
-                                else:
-                                    st.info("💡 Сначала нажмите '🎯 Найти лучший кластеризатор' для рекомендации")
-                                
-                                # Скачивание результатов
-                                st.subheader("💾 Скачивание результатов")
-                                
-                                csv_scores = scores_df.to_csv(index=False)
-                                st.download_button(
-                                    label="📥 Скачать сравнение scores (CSV)",
-                                    data=csv_scores,
-                                    file_name=f"cluster_scores_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                    mime="text/csv"
-                                )
-                                
-                                csv_metrics = metrics_df.to_csv(index=False)
-                                st.download_button(
-                                    label="📥 Скачать метрики (CSV)",
-                                    data=csv_metrics,
-                                    file_name=f"cluster_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                    mime="text/csv"
-                                )
-                    else:
-                        st.warning("⚠️ Выберите минимум 2 кластеризатора для сравнения")
-            else:
-                st.info("Загрузите данные для сравнения кластеризаций")
-        
         # Вкладка сравнения разных методов построения шкалы
         with tab_methods:
             st.header("🔬 Сравнение методов построения шкалы")
@@ -2598,15 +3279,15 @@ def render_dashboard():
                 
                 # Проверяем, есть ли результаты PCA/Spectral в session state
                 has_pca = "analyzer" in st.session_state or "df_results" in st.session_state
-                has_cluster = "cluster_comparison" in st.session_state
+                has_cluster = "cluster_scorer" in st.session_state and "df_with_cluster_scores" in st.session_state
                 
                 if not has_pca and not has_cluster:
                     st.warning("⚠️ Нет результатов для сравнения")
                     st.info("""
                     **Для сравнения методов:**
-                    1. Выполните PCA/Spectral анализ на вкладке "🔬 Спектральный анализ"
-                    2. Или выполните кластеризацию на вкладке "🔗 Кластеризация"
-                    3. Затем вернитесь сюда для сравнения
+                    1. Выполните спектральный анализ на вкладке "🔬 Спектральный анализ"
+                    2. (Опционально) Выполните кластеризацию в той же вкладке и примените маппинг на score
+                    3. Затем вернитесь сюда для сравнения методов
                     """)
                 else:
                     # Создаем объект сравнения
@@ -2620,12 +3301,11 @@ def render_dashboard():
                         if "PC1_spectrum" in df_results.columns:
                             method_comp.add_spectral_result("Spectral Analysis", df_results)
                     
-                    # Добавляем кластерные результаты
-                    if has_cluster:
-                        comparison = st.session_state.cluster_comparison
-                        if comparison.scores:
-                            for name, df_scores in comparison.scores.items():
-                                method_comp.add_cluster_result(f"Cluster: {name}", df_scores)
+                    # Добавляем кластерные результаты (если есть из спектрального анализа)
+                    if "cluster_scorer" in st.session_state and "df_with_cluster_scores" in st.session_state:
+                        df_cluster_scores = st.session_state.df_with_cluster_scores
+                        if "cluster_score" in df_cluster_scores.columns:
+                            method_comp.add_cluster_result("Cluster Scoring (spectrum_projection)", df_cluster_scores)
                     
                     if len(method_comp.results) == 0:
                         st.warning("⚠️ Нет валидных результатов для сравнения")
