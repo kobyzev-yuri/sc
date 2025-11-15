@@ -253,35 +253,11 @@ def render_dashboard():
             "Использовать относительные признаки", value=True
         )
         
-        # Режим выбора признаков
-        if use_relative_features:
-            st.markdown("#### 🎯 Режим выбора признаков")
-            feature_selection_mode = st.radio(
-                "Выберите режим отбора признаков:",
-                ["Только положительные loadings (рекомендуется)", "Все признаки"],
-                index=0,
-                help="Положительные loadings улучшают объясненную дисперсию PC1 и корректность классификации"
-            )
-            use_positive_loadings = (feature_selection_mode == "Только положительные loadings (рекомендуется)")
-            
-            if use_positive_loadings:
-                min_loading = st.slider(
-                    "Минимальный loading",
-                    0.0, 0.2, 0.05, 0.01,
-                    help="Признаки с loading выше этого значения будут включены"
-                )
-                exclude_paneth = st.checkbox(
-                    "Исключить Paneth признаки",
-                    value=True,
-                    help="Paneth клетки имеют обратную корреляцию с патологией"
-                )
-            else:
-                min_loading = 0.05
-                exclude_paneth = True
-        else:
-            use_positive_loadings = False
-            min_loading = 0.05
-            exclude_paneth = True
+        # Убрали режим выбора признаков - теперь используется интерфейс с чекбоксами
+        # Эти переменные больше не используются, но оставляем для совместимости со старым кодом
+        use_positive_loadings = False
+        min_loading = 0.05
+        exclude_paneth = True
 
         use_spectral_analysis = st.checkbox(
             "Применить спектральный анализ", value=True
@@ -376,7 +352,7 @@ def render_dashboard():
     # Основная область
     predictions = None
 
-    # Загрузка данных
+    # Загрузка данных с кэшированием
     if use_default_data:
         # Получаем выбранную директорию из session_state
         if "predictions_dir" in st.session_state and st.session_state.predictions_dir:
@@ -395,7 +371,14 @@ def render_dashboard():
                 predictions_dir = Path("results/predictions")
                 st.session_state.predictions_dir = "results/predictions"
         
-        if predictions_dir.exists():
+        # Ключ кэша для предиктов
+        predictions_cache_key = f"predictions_{predictions_dir}"
+        
+        # Проверяем кэш
+        if (predictions_cache_key in st.session_state and 
+            st.session_state.get("predictions_dir_cache") == str(predictions_dir)):
+            predictions = st.session_state[predictions_cache_key]
+        elif predictions_dir.exists():
             json_files = list(predictions_dir.glob("*.json"))
             if json_files:
                 with st.spinner(f"Загрузка предсказаний из {predictions_dir}..."):
@@ -407,74 +390,105 @@ def render_dashboard():
                             predictions[image_name] = preds
                         except Exception as e:
                             st.error(f"Ошибка при загрузке {json_file.name}: {e}")
+                    # Сохраняем в кэш
+                    st.session_state[predictions_cache_key] = predictions
+                    st.session_state.predictions_dir_cache = str(predictions_dir)
 
     elif uploaded_files:
-        # Загрузка предсказаний из загруженных файлов
-        with st.spinner("Загрузка предсказаний..."):
-            predictions = load_predictions_from_upload(uploaded_files)
+        # Для загруженных файлов используем хэш имен файлов как ключ кэша
+        files_hash = hash(tuple(sorted([f.name for f in uploaded_files])))
+        predictions_cache_key = f"predictions_uploaded_{files_hash}"
+        
+        if predictions_cache_key in st.session_state:
+            predictions = st.session_state[predictions_cache_key]
+        else:
+            # Загрузка предсказаний из загруженных файлов
+            with st.spinner("Загрузка предсказаний..."):
+                predictions = load_predictions_from_upload(uploaded_files)
+                # Сохраняем в кэш
+                st.session_state[predictions_cache_key] = predictions
 
-    # Обработка данных
+    # Обработка данных с кэшированием
     if predictions and len(predictions) > 0:
-        st.success(f"Загружено {len(predictions)} файлов")
+        # Ключ кэша для агрегированных данных
+        df_cache_key = f"df_aggregated_{hash(str(sorted(predictions.keys())))}"
+        
+        # Проверяем кэш агрегированных данных
+        if df_cache_key in st.session_state:
+            df = st.session_state[df_cache_key]
+        else:
+            st.success(f"Загружено {len(predictions)} файлов")
+            # Агрегация данных
+            with st.spinner("Агрегация данных..."):
+                rows = []
 
-        # Агрегация данных
-        with st.spinner("Агрегация данных..."):
-            rows = []
+                for image_name, preds in predictions.items():
+                    pred_stats = aggregate.aggregate_predictions_from_dict(
+                        preds, image_name
+                    )
+                    rows.append(pred_stats)
 
-            for image_name, preds in predictions.items():
-                pred_stats = aggregate.aggregate_predictions_from_dict(
-                    preds, image_name
-                )
-                rows.append(pred_stats)
+                df = pd.DataFrame(rows)
+                # Сохраняем в кэш
+                st.session_state[df_cache_key] = df
 
-            df = pd.DataFrame(rows)
-
-            if use_relative_features:
-                df_features = aggregate.create_relative_features(df)
+        # Кэширование df_features_full
+        if use_relative_features:
+            # Ключ кэша для полного набора признаков
+            df_features_full_cache_key = f"df_features_full_{df_cache_key}_{use_relative_features}"
+            
+            if df_features_full_cache_key in st.session_state:
+                df_features_full = st.session_state[df_features_full_cache_key]
+            else:
+                # Создаем полный набор относительных признаков
+                df_features_full = aggregate.create_relative_features(df)
+                # Сохраняем в кэш
+                st.session_state[df_features_full_cache_key] = df_features_full
+            
+            # Используем полный набор для интерфейса выбора признаков
+            df_features_for_selection = df_features_full.copy()
+            
+            # Применяем выбранные признаки из session_state (если есть) для анализа
+            if "selected_features" in st.session_state and st.session_state.selected_features:
+                current_selected = [f for f in st.session_state.selected_features if f in df_features_full.columns]
+                if current_selected:
+                    cols_to_keep = ["image"] + current_selected
+                    available_cols = [col for col in cols_to_keep if col in df_features_full.columns]
+                    df_features = df_features_full[available_cols]
+                else:
+                    df_features = df_features_full.copy()
+            else:
+                # Используем старый метод если нет выбранных признаков
                 df_features = aggregate.select_feature_columns(
-                    df_features,
+                    df_features_full,
                     use_positive_loadings=use_positive_loadings,
                     min_loading=min_loading,
                     exclude_paneth=exclude_paneth
                 )
-            else:
-                # Для абсолютных признаков используем только df, но убеждаемся, что нет относительных признаков
-                df_features = df.copy()
-                # Удаляем относительные признаки, если они случайно попали (из предыдущего анализа)
-                relative_cols = [col for col in df_features.columns if 'relative' in col.lower()]
-                if relative_cols:
-                    df_features = df_features.drop(columns=relative_cols)
-                # Удаляем White space, если он попал (служебный класс)
-                white_space_cols = [col for col in df_features.columns if 'white space' in col.lower()]
-                if white_space_cols:
-                    df_features = df_features.drop(columns=white_space_cols)
-                # Crypts остается в абсолютных признаках (он является признаком)
-                # Crypts исключается только из относительных признаков, так как используется как нормализатор
+        else:
+            # Для абсолютных признаков используем только df, но убеждаемся, что нет относительных признаков
+            df_features = df.copy()
+            # Удаляем относительные признаки, если они случайно попали (из предыдущего анализа)
+            relative_cols = [col for col in df_features.columns if 'relative' in col.lower()]
+            if relative_cols:
+                df_features = df_features.drop(columns=relative_cols)
+            # Удаляем White space, если он попал (служебный класс)
+            white_space_cols = [col for col in df_features.columns if 'white space' in col.lower()]
+            if white_space_cols:
+                df_features = df_features.drop(columns=white_space_cols)
+            # Crypts остается в абсолютных признаках (он является признаком)
+            # Crypts исключается только из относительных признаков, так как используется как нормализатор
             
-            # Исключение или выбор признаков (применяется автоматически)
-            if "selection_mode" in st.session_state:
-                if st.session_state.selection_mode == "Исключить признаки (blacklist)":
-                    # Blacklist режим
-                    if "excluded_features" in st.session_state and st.session_state.excluded_features:
-                        excluded = st.session_state.excluded_features
-                        available_excluded = [f for f in excluded if f in df_features.columns]
-                        if available_excluded:
-                            df_features = df_features.drop(columns=available_excluded)
-                elif st.session_state.selection_mode == "Использовать только выбранные (whitelist)":
-                    # Whitelist режим - используем только выбранные
-                    if "included_features" in st.session_state and st.session_state.included_features:
-                        included = st.session_state.included_features
-                        available_included = [f for f in included if f in df_features.columns]
-                        if available_included:
-                            # Сохраняем image и добавляем выбранные признаки
-                            cols_to_keep = ["image"] + available_included
-                            df_features = df_features[cols_to_keep]
-            elif "excluded_features" in st.session_state and st.session_state.excluded_features:
-                # Обратная совместимость
-                excluded = st.session_state.excluded_features
-                available_excluded = [f for f in excluded if f in df_features.columns]
-                if available_excluded:
-                    df_features = df_features.drop(columns=available_excluded)
+            # Используем df для интерфейса выбора признаков (без относительных признаков)
+            df_features_for_selection = df_features.copy()
+            
+            # Применяем выбранные признаки из нового интерфейса
+            if "selected_features" in st.session_state and st.session_state.selected_features:
+                current_selected = [f for f in st.session_state.selected_features if f in df_features.columns]
+                if current_selected:
+                    cols_to_keep = ["image"] + current_selected
+                    available_cols = [col for col in cols_to_keep if col in df_features.columns]
+                    df_features = df_features[available_cols]
 
         st.session_state.df_results = df_features
         st.session_state.settings = {
@@ -486,12 +500,12 @@ def render_dashboard():
 
         # Вкладки для визуализации
         # Упрощенная структура: кластеризация интегрирована в спектральный анализ
-        tab_names = ["📊 Данные", "🎯 Выбор признаков", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔬 Сравнение методов построения шкалы"]
+        tab_names = ["🎯 Выбор признаков", "📊 Данные", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔬 Сравнение методов построения шкалы"]
         if enable_comparison:
             tab_names.append("⚖️ Сравнение методов")
         
         tabs = st.tabs(tab_names)
-        tab1, tab_features, tab2, tab3, tab4, tab5, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
+        tab_features, tab1, tab2, tab3, tab4, tab5, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
         tab_comparison = tabs[7] if enable_comparison else None
 
         with tab1:
@@ -548,13 +562,20 @@ def render_dashboard():
 
         with tab_features:
             st.header("🎯 Выбор признаков для анализа")
-            st.markdown("Выберите, какие признаки использовать для построения шкалы патологии.")
+            st.markdown("Выберите признаки для построения шкалы патологии. Изменения применяются после нажатия кнопки 'Применить признаки'.")
             
-            if len(df_features) > 0:
+            # Используем полный набор признаков для интерфейса выбора
+            if 'df_features_for_selection' in locals():
+                df_features_for_ui = df_features_for_selection
+            else:
+                df_features_for_ui = df_features
+            
+            if len(df_features_for_ui) > 0:
                 # Для абсолютных признаков Crypts остается в df_features (он является признаком)
                 # Crypts исключается только из относительных признаков, так как используется как нормализатор
                 
-                numeric_cols = df_features.select_dtypes(include=[np.number]).columns.tolist()
+                # Используем полный набор признаков для интерфейса
+                numeric_cols = df_features_for_ui.select_dtypes(include=[np.number]).columns.tolist()
                 if "image" in numeric_cols:
                     numeric_cols.remove("image")
                 
@@ -591,319 +612,430 @@ def render_dashboard():
                         and 'relative' not in col.lower()  # Исключаем относительные признаки
                     ]
                 
-                # Режим выбора: исключить или использовать только выбранные
-                selection_mode = st.radio(
-                    "Режим выбора признаков",
-                    ["Использовать все признаки", "Исключить признаки (blacklist)", "Использовать только выбранные (whitelist)"],
-                    horizontal=True,
-                    help="Все признаки: использует все доступные. Blacklist: исключает выбранные. Whitelist: использует только выбранные."
-                )
+                # Сортируем признаки для удобства
+                feature_cols = sorted(feature_cols)
                 
-                # Инициализация из session state
-                if "selection_mode" not in st.session_state:
-                    st.session_state.selection_mode = "Использовать все признаки"
-                if "excluded_features" not in st.session_state:
-                    st.session_state.excluded_features = []
-                if "included_features" not in st.session_state:
-                    st.session_state.included_features = []
+                # Путь к конфигурационному файлу
+                # Определяем файл конфигурации в зависимости от типа признаков
+                config_file_relative = Path(__file__).parent / "feature_selection_config_relative.json"
+                config_file_absolute = Path(__file__).parent / "feature_selection_config_absolute.json"
+                config_file = config_file_relative if use_relative_features else config_file_absolute
                 
-                # Предложенные исключения из анализа образца
-                suggested = []
-                if "suggested_exclusions" in st.session_state:
-                    suggested = st.session_state.suggested_exclusions
-                
-                excluded_features = None
-                included_features = None
-                
-                # Используем сохраненные значения из session_state для отображения
-                if "excluded_features" in st.session_state:
-                    excluded_features = st.session_state.excluded_features
-                if "included_features" in st.session_state:
-                    included_features = st.session_state.included_features
-                
-                if selection_mode == "Исключить признаки (blacklist)":
-                    st.markdown("**Выберите признаки для исключения:**")
-                    st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
+                # Вспомогательная функция для получения признаков по умолчанию (определяем ДО использования)
+                def _get_default_positive_loadings_features(df_features_for_ui, feature_cols, use_relative_features):
+                    """Получает признаки по умолчанию (положительные loadings + EoE)."""
+                    # Если нет признаков, возвращаем пустой список
+                    if not feature_cols or len(feature_cols) == 0:
+                        return []
                     
-                    # Группируем признаки по категориям для удобства (используем feature_cols вместо numeric_cols)
-                    pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
-                    meta_features = [f for f in feature_cols if 'meta' in f.lower()]
-                    immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['neutrophils', 'plasma', 'enterocytes'])]
-                    # Исключаем структурные элементы, используемые только для разбора по слоям
-                    structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['surface epithelium', 'muscularis mucosae'])]
-                    other_features = [f for f in feature_cols if f not in pathology_features + meta_features + immune_features + structural_features]
+                    # Если df_features_for_ui пустой или не содержит данных, возвращаем пустой список
+                    if df_features_for_ui is None or len(df_features_for_ui) == 0:
+                        return []
                     
-                    # Используем сохраненные значения для default
-                    # Фильтруем, чтобы значения были только из доступных опций
-                    default_excluded_pathology = [f for f in excluded_features if f in pathology_features] if excluded_features else []
-                    default_excluded_meta = [f for f in excluded_features if f in meta_features] if excluded_features else ([f for f in suggested if f in meta_features] if suggested else [])
-                    default_excluded_immune = [f for f in excluded_features if f in immune_features] if excluded_features else ([f for f in suggested if f in immune_features] if suggested else [])
-                    default_excluded_other = [f for f in excluded_features if f in other_features] if excluded_features else []
-                    
-                    with st.form("feature_selection_blacklist_form", clear_on_submit=False):
-                        col1, col2 = st.columns(2)
+                    try:
+                        from . import pca_scoring
+                        df_all_features = aggregate.select_all_feature_columns(df_features_for_ui)
+                        all_feature_cols = [c for c in df_all_features.columns if c != "image"]
                         
-                        with col1:
-                            st.markdown("**Патологические признаки:**")
-                            pathology_selected = st.multiselect(
-                                "Исключить патологические",
-                                pathology_features,
-                                default=default_excluded_pathology,
-                                key="exclude_pathology_form",
-                                label_visibility="collapsed"
+                        if len(all_feature_cols) == 0:
+                            # Если нет признаков для PCA, возвращаем пустой список
+                            return []
+                        
+                        if len(df_all_features) < 2:
+                            # Если слишком мало образцов для PCA, возвращаем пустой список
+                            return []
+                        
+                        pca_scorer = pca_scoring.PCAScorer()
+                        pca_scorer.fit(df_all_features, all_feature_cols)
+                        loadings = pca_scorer.get_feature_importance()
+                        
+                        # Для относительных признаков исключаем Paneth, для абсолютных - нет
+                        if use_relative_features:
+                            positive_features = [
+                                feat for feat, loading in loadings.items()
+                                if loading > 0.05 and 'Paneth' not in feat
+                            ]
+                        else:
+                            # Для абсолютных признаков берем все положительные loadings
+                            positive_features = [
+                                feat for feat, loading in loadings.items()
+                                if loading > 0.05
+                            ]
+                        
+                        eoe_features = [f for f in feature_cols if 'EoE' in f or 'eoe' in f.lower()]
+                        default_selected = list(set(positive_features + eoe_features))
+                        result = [f for f in default_selected if f in feature_cols]
+                        
+                        # Если результат пустой, используем топ признаков по модулю loadings (fallback)
+                        if not result:
+                            # Сортируем признаки по абсолютному значению loadings
+                            sorted_loadings = sorted(
+                                [(feat, abs(loading)) for feat, loading in loadings.items() if feat in feature_cols],
+                                key=lambda x: x[1],
+                                reverse=True
                             )
                             
-                            st.markdown("**Метаплазия:**")
-                            meta_selected = st.multiselect(
-                                "Исключить Meta",
-                                meta_features,
-                                default=default_excluded_meta,
-                                key="exclude_meta_form",
-                                label_visibility="collapsed"
-                            )
+                            # Берем топ 10-15 признаков (или все, если их меньше)
+                            top_n = min(15, len(sorted_loadings))
+                            if top_n > 0:
+                                # Для относительных признаков исключаем Paneth из топ-списка
+                                if use_relative_features:
+                                    top_features = [
+                                        feat for feat, _ in sorted_loadings[:top_n * 2]  # Берем больше, чтобы после фильтрации осталось достаточно
+                                        if 'Paneth' not in feat
+                                    ][:top_n]
+                                else:
+                                    top_features = [feat for feat, _ in sorted_loadings[:top_n]]
+                                
+                                # Добавляем EoE, если есть
+                                top_features = list(set(top_features + eoe_features))
+                                result = [f for f in top_features if f in feature_cols]
                         
-                        with col2:
-                            st.markdown("**Иммунные клетки:**")
-                            immune_selected = st.multiselect(
-                                "Исключить иммунные",
-                                immune_features,
-                                default=default_excluded_immune,
-                                key="exclude_immune_form",
-                                label_visibility="collapsed"
+                        return result
+                    except Exception as e:
+                        # В случае ошибки возвращаем пустой список (не все признаки!)
+                        return []
+                
+                # Функция для загрузки конфигурации
+                def load_feature_config():
+                    """Загружает выбранные признаки из конфигурационного файла."""
+                    if config_file.exists():
+                        try:
+                            with open(config_file, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                                return config.get("selected_features", [])
+                        except Exception as e:
+                            st.warning(f"⚠️ Не удалось загрузить конфигурацию: {e}")
+                            return []
+                    return []
+                
+                # Функция для сохранения конфигурации
+                def save_feature_config(selected_features_list):
+                    """Сохраняет выбранные признаки в конфигурационный файл."""
+                    try:
+                        config = {
+                            "selected_features": selected_features_list,
+                            "description": f"Выбранные {'относительные' if use_relative_features else 'абсолютные'} признаки для построения шкалы патологии",
+                            "last_updated": datetime.now().isoformat()
+                        }
+                        with open(config_file, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, indent=2, ensure_ascii=False)
+                        return True
+                    except Exception as e:
+                        st.error(f"❌ Не удалось сохранить конфигурацию: {e}")
+                        return False
+                
+                # Инициализация session state для выбранных признаков
+                # Ключ для отслеживания типа признаков
+                features_type_key = f"features_type_{use_relative_features}"
+                
+                # Если изменился тип признаков, очищаем выбранные признаки
+                if features_type_key not in st.session_state or st.session_state.get(features_type_key) != use_relative_features:
+                    # Тип признаков изменился - очищаем и загружаем новый конфиг
+                    if "selected_features" in st.session_state:
+                        del st.session_state.selected_features
+                    st.session_state[features_type_key] = use_relative_features
+                
+                if "selected_features" not in st.session_state:
+                    # Пытаемся загрузить из конфигурационного файла
+                    config_features = load_feature_config()
+                    
+                    if config_features:
+                        # Фильтруем только существующие признаки
+                        valid_config_features = [f for f in config_features if f in feature_cols]
+                        if valid_config_features:
+                            st.session_state.selected_features = valid_config_features
+                        else:
+                            # Если конфигурация не подходит, используем положительные loadings + EoE
+                            # Показываем, какие признаки не совпали
+                            missing_features = [f for f in config_features if f not in feature_cols]
+                            if missing_features:
+                                st.warning(f"⚠️ Все признаки из конфига не найдены в данных. Не найдено: {missing_features[:5]}{'...' if len(missing_features) > 5 else ''}")
+                                # Показываем примеры реальных признаков для отладки
+                                if feature_cols:
+                                    st.info(f"💡 Примеры доступных признаков: {feature_cols[:5]}{'...' if len(feature_cols) > 5 else ''}")
+                            default_features = _get_default_positive_loadings_features(
+                                df_features_for_ui, feature_cols, use_relative_features
                             )
-                            
-                            st.markdown("**Другие признаки:**")
-                            other_selected = st.multiselect(
-                                "Исключить другие",
-                                other_features,
-                                default=default_excluded_other,
-                                key="exclude_other_form",
-                                label_visibility="collapsed"
-                            )
-                        
-                        submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
-                        if submitted:
-                            excluded_features = pathology_selected + meta_selected + immune_selected + other_selected
-                            st.session_state.excluded_features = excluded_features
-                            st.session_state.included_features = []  # Очищаем whitelist при использовании blacklist
-                            st.rerun()
-                    
-                    # Используем сохраненные значения
-                    excluded_features = st.session_state.excluded_features if st.session_state.excluded_features else []
-                    
-                elif selection_mode == "Использовать только выбранные (whitelist)":
-                    st.markdown("**Выберите признаки для использования:**")
-                    st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
-                    
-                    # Группируем признаки (используем feature_cols вместо numeric_cols)
-                    pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
-                    meta_features = [f for f in feature_cols if 'meta' in f.lower()]
-                    immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['neutrophils', 'plasma', 'enterocytes'])]
-                    # Исключаем структурные элементы, используемые только для разбора по слоям
-                    structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                        ['surface epithelium', 'muscularis mucosae'])]
-                    other_features = [f for f in feature_cols if f not in pathology_features + meta_features + immune_features + structural_features]
-                    
-                    # Быстрый выбор: кнопки для предустановок (вне формы, чтобы работали сразу)
-                    st.markdown("**Быстрый выбор (нажмите кнопку для автоматического выбора):**")
-                    preset_cols = st.columns(4)
-                    
-                    with preset_cols[0]:
-                        if st.button("Только патология", use_container_width=True, key="preset_pathology"):
-                            st.session_state.included_features = pathology_features
-                            st.session_state.excluded_features = []  # Очищаем blacklist
-                            st.rerun()
-                    
-                    with preset_cols[1]:
-                        if st.button("Патология + Иммунные", use_container_width=True, key="preset_path_immune"):
-                            st.session_state.included_features = pathology_features + immune_features
-                            st.session_state.excluded_features = []
-                            st.rerun()
-                    
-                    with preset_cols[2]:
-                        if st.button("Все кроме Meta", use_container_width=True, key="preset_no_meta"):
-                            st.session_state.included_features = [f for f in feature_cols if f not in meta_features]
-                            st.session_state.excluded_features = []
-                            st.rerun()
-                    
-                    with preset_cols[3]:
-                        if st.button("Очистить", use_container_width=True, key="preset_clear"):
-                            st.session_state.included_features = []
-                            st.session_state.excluded_features = []
-                            st.rerun()
-                    
-                    # Используем сохраненные значения или патологические по умолчанию
-                    # Фильтруем сохраненные значения, чтобы они были только из доступных опций
-                    if st.session_state.included_features:
-                        saved_included = st.session_state.included_features
-                        default_whitelist = [f for f in saved_included if f in numeric_cols]
-                        if not default_whitelist:
-                            default_whitelist = pathology_features
+                            if default_features:
+                                st.session_state.selected_features = default_features
+                            else:
+                                # Если и по умолчанию ничего не получилось, используем базовый набор
+                                basic_features = []
+                                pathology_patterns = ['Dysplasia', 'Mild', 'Moderate', 'Meta', 'Neutrophils', 'Plasma Cells', 'Granulomas']
+                                for pattern in pathology_patterns:
+                                    matching = [f for f in feature_cols if pattern.lower() in f.lower()]
+                                    basic_features.extend(matching)
+                                eoe_features = [f for f in feature_cols if 'EoE' in f or 'eoe' in f.lower()]
+                                basic_features.extend(eoe_features)
+                                basic_features = list(set([f for f in basic_features if f in feature_cols]))
+                                if basic_features:
+                                    st.session_state.selected_features = basic_features
                     else:
-                        default_whitelist = pathology_features
-                    
-                    with st.form("feature_selection_whitelist_form", clear_on_submit=False):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("**Патологические признаки:**")
-                            pathology_selected = st.multiselect(
-                                "Выбрать патологические",
-                                pathology_features,
-                                default=[f for f in default_whitelist if f in pathology_features],
-                                key="include_pathology_form",
-                                label_visibility="collapsed"
-                            )
-                            
-                            st.markdown("**Метаплазия:**")
-                            meta_selected = st.multiselect(
-                                "Выбрать Meta",
-                                meta_features,
-                                default=[f for f in default_whitelist if f in meta_features],
-                                key="include_meta_form",
-                                label_visibility="collapsed"
-                            )
-                        
-                        with col2:
-                            st.markdown("**Иммунные клетки:**")
-                            immune_selected = st.multiselect(
-                                "Выбрать иммунные",
-                                immune_features,
-                                default=[f for f in default_whitelist if f in immune_features],
-                                key="include_immune_form",
-                                label_visibility="collapsed"
-                            )
-                            
-                            st.markdown("**Другие признаки:**")
-                            other_selected = st.multiselect(
-                                "Выбрать другие",
-                                other_features,
-                                default=[f for f in default_whitelist if f in other_features],
-                                key="include_other_form",
-                                label_visibility="collapsed"
-                            )
-                        
-                        submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
-                        if submitted:
-                            included_features = pathology_selected + meta_selected + immune_selected + other_selected
-                            st.session_state.included_features = included_features
-                            st.session_state.excluded_features = []  # Очищаем blacklist при использовании whitelist
-                            st.rerun()
-                    
-                    # Используем сохраненные значения
-                    included_features = st.session_state.included_features if st.session_state.included_features else []
+                        # Если конфигурации нет, используем положительные loadings + EoE
+                        default_features = _get_default_positive_loadings_features(
+                            df_features_for_ui, feature_cols, use_relative_features
+                        )
+                        if default_features:
+                            st.session_state.selected_features = default_features
+                        else:
+                            # Если и по умолчанию ничего не получилось, используем базовый набор
+                            basic_features = []
+                            pathology_patterns = ['Dysplasia', 'Mild', 'Moderate', 'Meta', 'Neutrophils', 'Plasma Cells', 'Granulomas']
+                            for pattern in pathology_patterns:
+                                matching = [f for f in feature_cols if pattern.lower() in f.lower()]
+                                basic_features.extend(matching)
+                            eoe_features = [f for f in feature_cols if 'EoE' in f or 'eoe' in f.lower()]
+                            basic_features.extend(eoe_features)
+                            basic_features = list(set([f for f in basic_features if f in feature_cols]))
+                            if basic_features:
+                                st.session_state.selected_features = basic_features
                 
-                # Сохраняем в session state (уже сохранено выше, но для совместимости оставляем)
-                st.session_state.selection_mode = selection_mode
+                # Обновляем список выбранных признаков если изменились доступные признаки
+                # НО только если список не пустой (чтобы не очищать загруженный конфиг)
+                if st.session_state.selected_features:
+                    current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                    if len(current_selected) != len(st.session_state.selected_features):
+                        # Обновляем только если есть различия, но не очищаем полностью
+                        if current_selected:
+                            st.session_state.selected_features = current_selected
+                        # Если после фильтрации список стал пустым, это означает, что признаки изменились
+                        # В этом случае используем значения по умолчанию
+                        elif len(st.session_state.selected_features) > 0:
+                            # Признаки были, но не совпали - используем значения по умолчанию
+                            st.session_state.selected_features = _get_default_positive_loadings_features(
+                                df_features_for_ui, feature_cols, use_relative_features
+                            )
+                
+                # Если после всех операций список пустой, используем значения по умолчанию
+                if not st.session_state.selected_features or len(st.session_state.selected_features) == 0:
+                    default_features = _get_default_positive_loadings_features(
+                        df_features_for_ui, feature_cols, use_relative_features
+                    )
+                    if default_features:
+                        st.session_state.selected_features = default_features
+                    else:
+                        # Если и по умолчанию ничего не получилось, используем базовый набор признаков
+                        # Выбираем патологические признаки + EoE (если есть)
+                        basic_features = []
+                        # Патологические признаки
+                        pathology_patterns = ['Dysplasia', 'Mild', 'Moderate', 'Meta', 'Neutrophils', 'Plasma Cells', 'Granulomas']
+                        for pattern in pathology_patterns:
+                            matching = [f for f in feature_cols if pattern.lower() in f.lower()]
+                            basic_features.extend(matching)
+                        
+                        # EoE
+                        eoe_features = [f for f in feature_cols if 'EoE' in f or 'eoe' in f.lower()]
+                        basic_features.extend(eoe_features)
+                        
+                        # Убираем дубликаты и фильтруем только существующие признаки
+                        basic_features = list(set([f for f in basic_features if f in feature_cols]))
+                        
+                        if basic_features:
+                            st.session_state.selected_features = basic_features
+                        # Если и базовых признаков нет, оставляем пустым
+                
+                # Проверяем, не выбраны ли случайно все признаки (это может быть ошибка)
+                # Если выбрано больше 90% признаков, вероятно это ошибка - очищаем
+                if len(st.session_state.selected_features) > 0.9 * len(feature_cols):
+                    # Если почти все признаки выбраны, но это не было сделано явно через кнопку "Выбрать все",
+                    # то вероятно это ошибка инициализации - очищаем и используем только положительные loadings
+                    if "features_all_selected_explicitly" not in st.session_state:
+                        # Пересчитываем положительные loadings
+                        st.session_state.selected_features = _get_default_positive_loadings_features(
+                            df_features_for_ui, feature_cols, use_relative_features
+                        )
+                
+                # НЕ устанавливаем все признаки по умолчанию - пользователь должен выбрать явно
+                
+                # ============================================
+                # ПРОСТОЙ ИНТЕРФЕЙС: Один список со всеми признаками
+                # ============================================
+                st.markdown("### 📋 Список всех признаков")
+                st.info("💡 Отметьте признаки для использования. Изменения применяются после нажатия кнопки 'Применить признаки'.")
+                
+                # Показываем количество выбранных
+                selected_count = len([f for f in st.session_state.selected_features if f in feature_cols])
+                st.caption(f"Выбрано: {selected_count} из {len(feature_cols)} признаков")
+                
+                # Показываем все доступные признаки
+                with st.expander("🔍 Отладка: Все доступные признаки", expanded=False):
+                    st.write(f"Всего признаков в feature_cols: {len(feature_cols)}")
+                    st.write("Список всех признаков:")
+                    for feat in sorted(feature_cols):
+                        st.text(f"  • {feat}")
+                
+                # Группируем признаки по категориям для удобства отображения
+                pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                    ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
+                meta_features = [f for f in feature_cols if 'meta' in f.lower()]
+                immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                    ['neutrophils', 'plasma', 'enterocytes'])]
+                structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                    ['surface epithelium', 'muscularis mucosae'])]
+                paneth_features = [f for f in feature_cols if 'paneth' in f.lower()]
+                other_features = [f for f in feature_cols if f not in pathology_features + meta_features + 
+                    immune_features + structural_features + paneth_features]
+                
+                # Проверяем, есть ли структурные признаки в данных
+                if not structural_features:
+                    st.warning("⚠️ Surface epithelium и Muscularis mucosae не найдены в данных. "
+                             "Убедитесь, что они присутствуют в исходных предсказаниях (JSON файлах).")
+                
+                # Форма для выбора признаков
+                with st.form("feature_selection_form", clear_on_submit=False):
+                    # Группируем в колонки для компактности
+                    col1, col2, col3 = st.columns(3)
+                    
+                    selected_features_dict = {}
+                    
+                    # Убеждаемся, что все признаки из feature_cols попадут в словарь
+                    # Сначала добавляем все признаки в словарь со значением False
+                    for feat in feature_cols:
+                        selected_features_dict[feat] = False
+                    
+                    with col1:
+                        if pathology_features:
+                            selected_count = sum(1 for f in pathology_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Патологические:** ({selected_count}/{len(pathology_features)} выбрано)")
+                            for feat in pathology_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Патологические:** (нет признаков)")
+                        
+                        if meta_features:
+                            selected_count = sum(1 for f in meta_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Метаплазия:** ({selected_count}/{len(meta_features)} выбрано)")
+                            for feat in meta_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Метаплазия:** (нет признаков)")
+                    
+                    with col2:
+                        if immune_features:
+                            selected_count = sum(1 for f in immune_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Иммунные клетки:** ({selected_count}/{len(immune_features)} выбрано)")
+                            for feat in immune_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Иммунные клетки:** (нет признаков)")
+                        
+                        if paneth_features:
+                            selected_count = sum(1 for f in paneth_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Paneth:** ({selected_count}/{len(paneth_features)} выбрано)")
+                            for feat in paneth_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Paneth:** (нет признаков)")
+                    
+                    with col3:
+                        if structural_features:
+                            selected_count = sum(1 for f in structural_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Структурные:** ({selected_count}/{len(structural_features)} выбрано)")
+                            for feat in structural_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Структурные:** (нет признаков)")
+                        
+                        if other_features:
+                            selected_count = sum(1 for f in other_features if f in st.session_state.selected_features)
+                            st.markdown(f"**Другие:** ({selected_count}/{len(other_features)} выбрано)")
+                            for feat in other_features:
+                                selected_features_dict[feat] = st.checkbox(
+                                    feat,
+                                    value=feat in st.session_state.selected_features,
+                                    key=f"feat_{feat}"
+                                )
+                        else:
+                            st.markdown("**Другие:** (нет признаков)")
+                    
+                    # Показываем информацию о всех признаках
+                    st.markdown("---")
+                    total_selected = sum(1 for v in selected_features_dict.values() if v)
+                    st.caption(f"📊 Всего признаков: {len(feature_cols)}, Выбрано: {total_selected}, Не выбрано: {len(feature_cols) - total_selected}")
+                    
+                    # Показываем невыбранные признаки для удобства
+                    unselected_features = [f for f in feature_cols if not selected_features_dict.get(f, False)]
+                    if unselected_features:
+                        with st.expander(f"👁️ Показать невыбранные признаки ({len(unselected_features)})"):
+                            for feat in sorted(unselected_features):
+                                st.text(f"  ☐ {feat}")
+                    
+                    # Кнопка применения
+                    apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
+                    
+                    if apply_button:
+                        # Применяем выбранные чекбоксы
+                        selected_features_list = [f for f, selected in selected_features_dict.items() if selected]
+                        
+                        # Сохраняем выбранные признаки
+                        st.session_state.selected_features = selected_features_list
+                        st.session_state.features_applied = True
+                        
+                        # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
+                        if "analyzer" in st.session_state and st.session_state.analyzer.gmm is not None:
+                            # Очищаем GMM из анализатора
+                            st.session_state.analyzer.gmm = None
+                        # Очищаем кэш спектра
+                        if "df_spectrum" in st.session_state:
+                            del st.session_state.df_spectrum
+                        if "spectrum_cache_key" in st.session_state:
+                            del st.session_state.spectrum_cache_key
+                        # Очищаем кэш качества GMM
+                        cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
+                        for key in cache_keys_to_remove:
+                            del st.session_state[key]
+                        # Очищаем результаты кластеризаций (они зависят от признаков и PCA)
+                        if "clusterer" in st.session_state:
+                            del st.session_state.clusterer
+                        if "cluster_scorer" in st.session_state:
+                            del st.session_state.cluster_scorer
+                        if "df_with_cluster_scores" in st.session_state:
+                            del st.session_state.df_with_cluster_scores
+                        
+                        # Сохраняем в конфигурационный файл
+                        if save_feature_config(selected_features_list):
+                            st.success("✅ Конфигурация сохранена в файл")
+                        
+                        st.rerun()
                 
                 # Показываем текущий статус
                 st.markdown("---")
-                if selection_mode == "Исключить признаки (blacklist)" and excluded_features:
-                    st.success(f"✅ Исключено {len(excluded_features)} признаков: {', '.join(excluded_features[:5])}{'...' if len(excluded_features) > 5 else ''}")
-                elif selection_mode == "Использовать только выбранные (whitelist)":
-                    if included_features:
-                        st.success(f"✅ Используется {len(included_features)} признаков: {', '.join(included_features[:5])}{'...' if len(included_features) > 5 else ''}")
-                    else:
-                        st.warning("⚠️ Не выбрано ни одного признака! Будут использованы все признаки.")
+                current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                if current_selected:
+                    st.success(f"✅ Выбрано {len(current_selected)} признаков")
+                    with st.expander("📋 Показать выбранные признаки"):
+                        for feat in sorted(current_selected):
+                            st.text(f"  • {feat}")
                 else:
-                    # Определяем тип признаков для информативного сообщения
-                    if use_relative_features:
-                        expected_count = 30  # 10 классов × 3
-                        feature_type = "относительных"
-                    else:
-                        expected_count = 22  # 11 классов × 2 (10 патологических + 1 Crypts)
-                        feature_type = "абсолютных"
-                    
-                    actual_count = len(feature_cols)
-                    total_numeric_count = len(numeric_cols)
-                    excluded_count = total_numeric_count - actual_count
-                    
-                    if actual_count == expected_count:
-                        st.info(f"ℹ️ Используются все {actual_count} {feature_type} признаков")
-                    else:
-                        # Определяем стандартные классы для сравнения
-                        if use_relative_features:
-                            standard_classes = [
-                                'Mild', 'Dysplasia', 'Moderate', 'Meta', 'Plasma Cells',
-                                'Neutrophils', 'EoE', 'Enterocytes', 'Granulomas', 'Paneth'
-                            ]
-                            standard_features = []
-                            for cls in standard_classes:
-                                standard_features.extend([
-                                    f"{cls}_relative_count",
-                                    f"{cls}_relative_area",
-                                    f"{cls}_mean_relative_area"
-                                ])
-                        else:
-                            standard_classes = [
-                                'Crypts', 'Mild', 'Dysplasia', 'Moderate', 'Meta',
-                                'Plasma Cells', 'Neutrophils', 'EoE', 'Enterocytes', 'Granulomas', 'Paneth'
-                            ]
-                            standard_features = []
-                            for cls in standard_classes:
-                                standard_features.extend([
-                                    f"{cls}_count",
-                                    f"{cls}_area"
-                                ])
-                        
-                        # Находим дополнительные признаки
-                        additional_features = [f for f in feature_cols if f not in standard_features]
-                        missing_features = [f for f in standard_features if f not in feature_cols]
-                        
-                        warning_msg = (
-                            f"⚠️ Обнаружено {actual_count} признаков классов (ожидается {expected_count} {feature_type} признаков). "
-                        )
-                        
-                        if additional_features:
-                            warning_msg += (
-                                f"\n\n📌 **Дополнительные признаки** (не из стандартного списка): "
-                                f"{', '.join(sorted(additional_features)[:10])}"
-                                f"{'...' if len(additional_features) > 10 else ''}"
-                            )
-                        
-                        if missing_features:
-                            warning_msg += (
-                                f"\n\n❌ **Отсутствующие стандартные признаки**: "
-                                f"{', '.join(sorted(missing_features)[:10])}"
-                                f"{'...' if len(missing_features) > 10 else ''}"
-                            )
-                        
-                        if excluded_count > 0:
-                            service_cols_found = [col for col in numeric_cols if any(service in col.lower() for service in service_columns)]
-                            warning_msg += (
-                                f"\n\nИсключено {excluded_count} служебных колонок из предыдущего анализа: "
-                                f"{', '.join(service_cols_found[:5])}{'...' if len(service_cols_found) > 5 else ''}. "
-                                f"Всего числовых колонок: {total_numeric_count}."
-                            )
-                        
-                        st.warning(warning_msg)
-                        
-                        # Показываем список найденных признаков для диагностики
-                        with st.expander("🔍 Диагностика: список найденных признаков"):
-                            st.write(f"**Всего числовых колонок:** {total_numeric_count}")
-                            st.write(f"**Признаков классов:** {actual_count}")
-                            st.write(f"**Ожидается:** {expected_count}")
-                            st.write(f"**Служебных колонок:** {excluded_count}")
-                            
-                            st.write(f"\n**Найденные признаки классов ({len(feature_cols)}):**")
-                            st.write(sorted(feature_cols))
-                            
-                            if additional_features:
-                                st.write(f"\n**Дополнительные признаки ({len(additional_features)}):**")
-                                st.write(sorted(additional_features))
-                            
-                            if missing_features:
-                                st.write(f"\n**Отсутствующие стандартные признаки ({len(missing_features)}):**")
-                                st.write(sorted(missing_features))
-                            
-                            if excluded_count > 0:
-                                st.write(f"\n**Исключенные служебные колонки ({excluded_count}):**")
-                                st.write(sorted([col for col in numeric_cols if col not in feature_cols]))
+                    st.warning("⚠️ Не выбрано ни одного признака! Будут использованы все признаки.")
+                    current_selected = feature_cols.copy()
+                
+                # Применяем выбранные признаки к df_features
+                if current_selected:
+                    cols_to_keep = ["image"] + current_selected
+                    available_cols = [col for col in cols_to_keep if col in df_features.columns]
+                    df_features = df_features[available_cols]
                 
                 # Рекомендации
                 with st.expander("💡 Рекомендации по выбору признаков"):
@@ -932,7 +1064,7 @@ def render_dashboard():
                        - Нажмите кнопку "Только патология" для быстрого выбора
                        - Или выберите вручную: Dysplasia, Mild, Moderate признаки
                     
-                    **После изменения признаков** нажмите кнопку "Обновить" для применения изменений.
+                    **После изменения признаков** нажмите кнопку "Применить признаки" для применения изменений и автоматического пересчета PCA.
                     """)
             else:
                 st.info("Загрузите данные, чтобы выбрать признаки")
@@ -1118,7 +1250,8 @@ def render_dashboard():
                 need_retrain = (
                     "analyzer" not in st.session_state or
                     "spectral_settings_key" not in st.session_state or
-                    st.session_state.spectral_settings_key != spectral_settings_key
+                    st.session_state.spectral_settings_key != spectral_settings_key or
+                    ("features_applied" in st.session_state and st.session_state.features_applied)  # Признаки были изменены
                 )
                 
                 if need_retrain:
@@ -1143,31 +1276,48 @@ def render_dashboard():
                         st.session_state.analyzer = analyzer
                         st.session_state.df_pca = df_pca
                         st.session_state.spectral_settings_key = spectral_settings_key
+                        # Очищаем флаг принудительного пересчета
+                        # Очищаем флаг применения признаков после пересчета PCA
+                        if "features_applied" in st.session_state:
+                            del st.session_state.features_applied
+                        # Очищаем кэш GMM качества, так как PCA изменился
+                        cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
+                        for key in cache_keys_to_remove:
+                            del st.session_state[key]
+                        # Очищаем сохраненный спектр
+                        if "df_spectrum" in st.session_state:
+                            del st.session_state.df_spectrum
                 else:
                     # Используем сохраненный анализатор
                     analyzer = st.session_state.analyzer
                     df_pca = st.session_state.df_pca
                 
-                # GMM (опционально) - выполняется независимо от переобучения
-                use_gmm = st.checkbox("Использовать GMM для моделирования состояний")
-                if use_gmm:
-                    # Оценка качества для разного числа компонентов
-                    with st.expander("🔍 Анализ качества аппроксимации GMM"):
+                # Оценка качества GMM (BIC) - выполняется автоматически при спектральном анализе
+                # Кэширование результатов оценки качества
+                cache_key = f"gmm_quality_{hash(str(df_pca['PC1'].values.tobytes()))}"
+                if cache_key not in st.session_state:
+                    with st.spinner("Вычисление метрик качества GMM (BIC) для определения оптимального числа компонентов..."):
+                        try:
+                            # Ограничиваем max_components для ускорения (5 вместо 10)
+                            quality_df = analyzer.evaluate_gmm_quality(df_pca, max_components=5)
+                            st.session_state[cache_key] = quality_df
+                        except Exception as e:
+                            st.warning(f"Не удалось оценить качество: {e}")
+                            quality_df = pd.DataFrame()
+                else:
+                    quality_df = st.session_state[cache_key]
+                
+                # Показываем результаты BIC для информации
+                optimal_components = 2  # Значение по умолчанию
+                if not quality_df.empty:
+                    best_bic_idx = quality_df["BIC"].idxmin()
+                    optimal_components = int(quality_df.loc[best_bic_idx, "Число компонентов"])
+                    optimal_bic = quality_df.loc[best_bic_idx, "BIC"]
+                    
+                    st.info(f"📊 **BIC анализ:** Оптимальное число компонентов GMM = **{optimal_components}** (BIC={optimal_bic:.1f})")
+                    
+                    with st.expander("🔍 Подробный анализ качества аппроксимации GMM (BIC, RMSE, R²)"):
                         st.markdown("**Оцените качество аппроксимации для разного числа компонентов:**")
-                        
-                        # Кэширование результатов оценки качества
-                        cache_key = f"gmm_quality_{hash(str(df_pca['PC1'].values.tobytes()))}"
-                        if cache_key not in st.session_state:
-                            with st.spinner("Вычисление метрик качества GMM (это может занять время)..."):
-                                try:
-                                    # Ограничиваем max_components для ускорения (5 вместо 10)
-                                    quality_df = analyzer.evaluate_gmm_quality(df_pca, max_components=5)
-                                    st.session_state[cache_key] = quality_df
-                                except Exception as e:
-                                    st.warning(f"Не удалось оценить качество: {e}")
-                                    quality_df = pd.DataFrame()
-                        else:
-                            quality_df = st.session_state[cache_key]
                         
                         try:
                             if not quality_df.empty:
@@ -1246,12 +1396,18 @@ def render_dashboard():
                                 """)
                         except Exception as e:
                             st.warning(f"Не удалось оценить качество: {e}")
+                
+                # GMM (опционально) - выполняется независимо от переобучения
+                use_gmm = st.checkbox("Использовать GMM для моделирования состояний")
+                if use_gmm:
+                    # Определяем оптимальное число компонентов по BIC (если доступно)
+                    default_n_components = optimal_components if not quality_df.empty else 2
                     
                     # Выбор числа компонентов
                     auto_components = st.checkbox(
                         "Автоматический выбор числа компонентов (BIC)",
                         value=True,
-                        help="Если выключено, можно задать число компонентов вручную"
+                        help=f"Если включено, используется оптимальное число компонентов по BIC ({default_n_components}). Если выключено, можно задать число компонентов вручную"
                     )
                     
                     n_components = None
@@ -1260,7 +1416,7 @@ def render_dashboard():
                             "Число компонентов GMM",
                             min_value=1,
                             max_value=min(10, len(df_pca) // 2),
-                            value=2,
+                            value=default_n_components,
                             help="Увеличьте число компонентов для лучшей аппроксимации, но осторожно с переобучением"
                         )
                     
@@ -1282,9 +1438,23 @@ def render_dashboard():
                              "Если выключено, используется фиксированное разделение на 4 категории (normal/mild/moderate/severe) "
                              "на основе позиции на спектральной шкале."
                     )
-
-                # Преобразование в спектральную шкалу
-                df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)
+                
+                # Определяем ключ для кэширования спектра
+                spectrum_cache_key = f"spectrum_{use_gmm}_{use_gmm_classification}_{analyzer.gmm.n_components if analyzer.gmm is not None else 'no_gmm'}"
+                
+                # Пересчитываем спектр если изменились настройки GMM или его нет в кэше
+                if (spectrum_cache_key not in st.session_state or 
+                    "df_spectrum" not in st.session_state or
+                    st.session_state.get("spectrum_cache_key") != spectrum_cache_key):
+                    # Преобразование в спектральную шкалу
+                    df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)
+                    
+                    # Сохраняем в session_state с ключом
+                    st.session_state.df_spectrum = df_spectrum
+                    st.session_state.spectrum_cache_key = spectrum_cache_key
+                else:
+                    # Используем сохраненный спектр
+                    df_spectrum = st.session_state.df_spectrum
                 
                 # Обновляем анализатор в session_state (на случай если был обучен GMM)
                 st.session_state.analyzer = analyzer

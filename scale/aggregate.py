@@ -28,14 +28,16 @@ def aggregate_predictions_from_dict(
         Словарь со статистикой: {class_name_count: int, class_name_area: float, ...}
     
     Исключает:
-        - Surface epithelium (структурный элемент, не используется как признак)
-        - Muscularis mucosae (структурный элемент, не используется как признак)
         - White space (служебный класс, не используется как признак)
+    
+    Включает:
+        - Surface epithelium и Muscularis mucosae (теперь используются как признаки)
     """
     stats = {"image": image_name}
     
-    # Список классов для исключения из абсолютных признаков
-    excluded_classes = ["Surface epithelium", "Muscularis mucosae", "White space"]
+    # Список классов для исключения из абсолютных признаков (только White space)
+    # Surface epithelium и Muscularis mucosae теперь включены как признаки
+    excluded_classes = ["White space"]
 
     for cls_name, pred_list in predictions.items():
         # Исключаем структурные элементы
@@ -109,14 +111,17 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
     
     Исключает:
         - Crypts (используется как нормализатор)
-        - Surface epithelium (структурный элемент, не используется как признак)
-        - Muscularis mucosae (структурный элемент, не используется как признак)
+        - White space (служебный класс)
+    
+    Включает:
+        - Surface epithelium и Muscularis mucosae (теперь используются как признаки)
     """
     df_new = pd.DataFrame()
     df_new["image"] = df["image"]
 
-    # Список классов для исключения
-    excluded_classes = ["Crypts", "Surface epithelium", "Muscularis mucosae", "White space"]
+    # Список классов для исключения (только Crypts и White space)
+    # Surface epithelium и Muscularis mucosae теперь включены как признаки
+    excluded_classes = ["Crypts", "White space"]
 
     area_cols = [col for col in df.columns if col.endswith("_area")]
     count_cols = [col for col in df.columns if col.endswith("_count")]
@@ -148,6 +153,8 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
                 df_new[col.replace("area", "mean_relative_area")] = (
                     relative_area / count_values
                 )
+            # Для Surface epithelium и Muscularis mucosae создается только relative_area
+            # (у них нет count, так как это области, а не отдельные объекты)
 
     return df_new
 
@@ -219,9 +226,9 @@ def select_all_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Paneth_mean_relative_area",
         # Структурные элементы (только area, без count):
         # Surface epithelium и Muscularis mucosae - это области, а не отдельные объекты
-        # ИСКЛЮЧЕНЫ из признаков: используются только для разбора по слоям, не как признаки
-        # "Surface epithelium_relative_area",
-        # "Muscularis mucosae_relative_area",
+        # Но теперь включены как признаки
+        "Surface epithelium_relative_area",
+        "Muscularis mucosae_relative_area",
     ]
 
     available_cols = [col for col in cols if col in df.columns]
