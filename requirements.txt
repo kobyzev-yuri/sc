@@ -32,6 +32,20 @@ ultralytics>=8.0.0
 torch>=2.0.0
 torchvision>=0.15.0
 
+# TensorRT оптимизация (опционально, для ускорения инференса на NVIDIA GPU)
+# Для использования TensorRT необходимо установить:
+# 1. CUDA Toolkit (совместимую версию с вашей GPU)
+# 2. TensorRT (через pip: nvidia-tensorrt или через NVIDIA package manager)
+# 3. Убедиться что версии CUDA, PyTorch и TensorRT совместимы
+# 
+# Пример установки TensorRT через pip (может не работать на всех системах):
+# pip install nvidia-tensorrt
+#
+# Или через NVIDIA package manager (рекомендуется):
+# https://developer.nvidia.com/tensorrt
+#
+# После установки TensorRT, используйте convert_to_tensorrt.py для конвертации моделей
+
 # Геометрические операции
 shapely>=2.0.0
 

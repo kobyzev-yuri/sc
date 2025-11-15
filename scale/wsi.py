@@ -7,8 +7,12 @@ from typing import Iterator, Optional, Tuple
 from skimage.measure import label, regionprops
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from shapely.geometry import Polygon as ShapelyPolygon
 
 from cucim.clara import CuImage
+
+
+RGB_BLACK = (0, 0, 0)
 
 
 class WSI:
@@ -221,28 +225,8 @@ class WSI:
                 cv2.LINE_AA,
             )
         
-        # Рисуем разделяющие ломаные (красные линии)
-        # Используем сохраненные отфильтрованные точки разделителя
-        for (sec_idx, sub_idx1, sub_idx2) in self._subsection_separator_points.keys():
-            if sec_idx == section_index:
-                separator_points = self._subsection_separator_points[(sec_idx, sub_idx1, sub_idx2)]
-                if len(separator_points) >= 2:
-                    # Переводим координаты отфильтрованных точек из WSI в локальную систему секции
-                    center_line_points = []
-                    for coord in separator_points:
-                        local_x = int((coord.x - section_bound.start.x) * scale_x)
-                        local_y = int((coord.y - section_bound.start.y) * scale_y)
-                        # Ограничиваем координаты
-                        local_x = max(0, min(local_x, img_w - 1))
-                        local_y = max(0, min(local_y, img_h - 1))
-                        center_line_points.append((local_x, local_y))
-                    
-                    if len(center_line_points) >= 2:
-                        # Рисуем ломаную линию (красный цвет, очень толстая линия)
-                        # Толщина зависит от размера изображения
-                        line_thickness = max(20, int(min(img_w, img_h) / 40))
-                        for k in range(len(center_line_points) - 1):
-                            cv2.line(section_img, center_line_points[k], center_line_points[k + 1], (0, 0, 255), line_thickness)
+        # Разделители не рисуем - они не нужны для визуализации
+        # Фильтрация дубликатов происходит через IoU в постпроцессинге
 
         return section_img
 
@@ -291,9 +275,26 @@ class WSI:
     def extract_subsection_bounds(self, section_index: int) -> list[domain.Box]:
         """Извлекает границы подсекций для указанной секции.
         
-        Подсекции - это отдельные связанные компоненты ткани внутри секции.
-        Каждый крупный кусок ткани становится отдельной подсекцией.
-        Если подсекции пересекаются, они разделяются линией так, чтобы не было пересечений.
+        ПРОЦЕСС РАЗБИЕНИЯ:
+        
+        1. Берем указанную секцию (обычно секция 0 - первая секция)
+        2. Находим отдельные кусочки ткани внутри секции:
+           - Если num_subsections=None (auto): автоматически находит все крупные кусочки
+           - Если num_subsections=N: берет N самых больших кусочков
+        3. Преобразуем найденные кусочки в подсекции (bounding boxes)
+        
+        ВАЖНО: 
+        - Подсекции МОГУТ ПЕРЕСЕКАТЬСЯ (bounding boxes могут пересекаться)
+        - Это нормально! Разделители помогают определить принадлежность предиктов,
+          но сами bounding boxes подсекций могут пересекаться
+        - Метод _split_overlapping_subsections пытается разделить пересечения,
+          но полного устранения пересечений может не быть
+        
+        Args:
+            section_index: Индекс секции для разбиения (обычно 0)
+            
+        Returns:
+            Список границ подсекций (могут пересекаться!)
         """
         section_bound = self.extract_biopsy_bound(section_index)
         
@@ -360,14 +361,15 @@ class WSI:
             box = domain.Box(start=subsection_start, end=subsection_end)
             subsection_bounds.append(box)
         
-        # Разделяем пересекающиеся подсекции, используя контуры
-        subsection_bounds = self._split_overlapping_subsections(
+        # Создаем разделители для пересекающихся подсекций, но НЕ обрезаем bounding boxes
+        # Подсекции могут пересекаться - это нормально, разделители помогут определить принадлежность
+        self._create_separators_for_overlapping_subsections(
             subsection_bounds, section_bound, subsection_contours, section_img.shape, scale_x, scale_y, section_index
         )
         
         return sorted(subsection_bounds, key=lambda x: (x.start.y, x.start.x))
 
-    def _split_overlapping_subsections(
+    def _create_separators_for_overlapping_subsections(
         self, 
         subsection_bounds: list[domain.Box], 
         section_bound: domain.Box,
@@ -376,31 +378,27 @@ class WSI:
         scale_x: float,
         scale_y: float,
         section_index: int = 0
-    ) -> list[domain.Box]:
-        """Разделяет пересекающиеся подсекции линией, используя контуры регионов ткани.
+    ) -> None:
+        """Создает разделители для пересекающихся подсекций БЕЗ обрезки bounding boxes.
+        
+        ВАЖНО: Этот метод НЕ изменяет bounding boxes подсекций - они могут пересекаться!
+        Он только создает разделители (separators), которые помогают определить принадлежность
+        предиктов к подсекциям в областях пересечения.
         
         Использует cv2.findContours для получения контуров и центры масс контуров
         для построения разделяющей линии между двумя подсекциями.
         """
         if len(subsection_bounds) < 2:
-            return subsection_bounds
-        
-        result_bounds = []
-        result_contours = []
+            return
         
         # Проверяем каждую пару подсекций на пересечение
-        for i, box1 in enumerate(subsection_bounds):
-            if i == 0:
-                # Первая подсекция добавляется как есть
-                result_bounds.append(box1)
-                result_contours.append(subsection_contours[i] if i < len(subsection_contours) else None)
-                continue
-            
-            # Проверяем пересечение с уже обработанными подсекциями
-            current_box = box1
+        for i in range(len(subsection_bounds)):
+            current_box = subsection_bounds[i]
             current_contour = subsection_contours[i] if i < len(subsection_contours) else None
             
-            for j, box2 in enumerate(result_bounds):
+            for j in range(i + 1, len(subsection_bounds)):
+                box2 = subsection_bounds[j]
+                
                 if current_box.intersects_with(box2):
                     # Находим область пересечения
                     inter_start = domain.Coords(
@@ -413,8 +411,8 @@ class WSI:
                     )
                     
                     if inter_start.x < inter_end.x and inter_start.y < inter_end.y:
-                        # Есть пересечение - используем контуры для построения разделяющей линии
-                        contour2 = result_contours[j] if j < len(result_contours) else None
+                        # Есть пересечение - создаем разделитель для определения принадлежности предиктов
+                        contour2 = subsection_contours[j] if j < len(subsection_contours) else None
                         
                         # Вычисляем центры масс контуров
                         if current_contour is not None and contour2 is not None:
@@ -465,147 +463,10 @@ class WSI:
                         )
                         
                         # Сохраняем разделяющий полигон и отфильтрованные точки для использования при предикте и визуализации
-                        self._subsection_separators[(section_index, j, i)] = separator_polygon
-                        self._subsection_separator_points[(section_index, j, i)] = filtered_separator_points
-                        
-                        # Разделяем пересечение по диагонали
-                        # Упрощенный подход: разделяем по линии, перпендикулярной к линии между центрами
-                        # через центр пересечения
-                        
-                        # Перпендикуляр к линии между центрами имеет наклон -dx/dy
-                        if abs(dy) > 1e-6:
-                            k_perp = -dx / dy
-                            
-                            # Разделяем по перпендикуляру через центр пересечения
-                            # Определяем, с какой стороны перпендикуляра находится каждый центр
-                            def perp_side(x, y):
-                                return y - k_perp * x + k_perp * inter_center_x - inter_center_y
-                            
-                            center1_perp_side = perp_side(center1.x, center1.y)
-                            center2_perp_side = perp_side(center2.x, center2.y)
-                            
-                            # Разделяем в зависимости от направления перпендикуляра
-                            if abs(k_perp) < 1:
-                                # Более горизонтальная линия - разделяем вертикально
-                                split_x = inter_center_x
-                                if center1_perp_side > center2_perp_side:
-                                    # center1 справа - current_box получает правую часть пересечения
-                                    if box2.end.x > split_x:
-                                        box2 = domain.Box(
-                                            start=box2.start,
-                                            end=domain.Coords(split_x, box2.end.y)
-                                        )
-                                        result_bounds[j] = box2
-                                    if current_box.start.x < split_x:
-                                        current_box = domain.Box(
-                                            start=domain.Coords(split_x, current_box.start.y),
-                                            end=current_box.end
-                                        )
-                                else:
-                                    # center2 справа - box2 получает правую часть пересечения
-                                    if current_box.end.x > split_x:
-                                        current_box = domain.Box(
-                                            start=current_box.start,
-                                            end=domain.Coords(split_x, current_box.end.y)
-                                        )
-                                    if box2.start.x < split_x:
-                                        box2 = domain.Box(
-                                            start=domain.Coords(split_x, box2.start.y),
-                                            end=box2.end
-                                        )
-                                        result_bounds[j] = box2
-                            else:
-                                # Более вертикальная линия - разделяем горизонтально
-                                split_y = inter_center_y
-                                if center1_perp_side > center2_perp_side:
-                                    # center1 выше - current_box получает верхнюю часть пересечения
-                                    if box2.end.y > split_y:
-                                        box2 = domain.Box(
-                                            start=box2.start,
-                                            end=domain.Coords(box2.end.x, split_y)
-                                        )
-                                        result_bounds[j] = box2
-                                    if current_box.start.y < split_y:
-                                        current_box = domain.Box(
-                                            start=domain.Coords(current_box.start.x, split_y),
-                                            end=current_box.end
-                                        )
-                                else:
-                                    # center2 выше - box2 получает верхнюю часть пересечения
-                                    if current_box.end.y > split_y:
-                                        current_box = domain.Box(
-                                            start=current_box.start,
-                                            end=domain.Coords(current_box.end.x, split_y)
-                                        )
-                                    if box2.start.y < split_y:
-                                        box2 = domain.Box(
-                                            start=domain.Coords(box2.start.x, split_y),
-                                            end=box2.end
-                                        )
-                                        result_bounds[j] = box2
-                        else:
-                            # Почти горизонтальная линия между центрами - разделяем вертикально
-                            split_x = inter_center_x
-                            if center1.x > center2.x:
-                                # center1 правее - current_box получает правую часть пересечения
-                                if box2.end.x > split_x:
-                                    box2 = domain.Box(
-                                        start=box2.start,
-                                        end=domain.Coords(split_x, box2.end.y)
-                                    )
-                                    result_bounds[j] = box2
-                                if current_box.start.x < split_x:
-                                    current_box = domain.Box(
-                                        start=domain.Coords(split_x, current_box.start.y),
-                                        end=current_box.end
-                                    )
-                            else:
-                                # center2 правее - box2 получает правую часть пересечения
-                                if current_box.end.x > split_x:
-                                    current_box = domain.Box(
-                                        start=current_box.start,
-                                        end=domain.Coords(split_x, current_box.end.y)
-                                    )
-                                if box2.start.x < split_x:
-                                    box2 = domain.Box(
-                                        start=domain.Coords(split_x, box2.start.y),
-                                        end=box2.end
-                                    )
-                                    result_bounds[j] = box2
-                    else:
-                        # Почти вертикальная линия между центрами - разделяем горизонтально
-                        split_y = inter_center_y
-                        if center1.y < center2.y:
-                            # center1 выше - current_box получает верхнюю часть пересечения
-                            if box2.end.y > split_y:
-                                box2 = domain.Box(
-                                    start=box2.start,
-                                    end=domain.Coords(box2.end.x, split_y)
-                                )
-                                result_bounds[j] = box2
-                            if current_box.start.y < split_y:
-                                current_box = domain.Box(
-                                    start=domain.Coords(current_box.start.x, split_y),
-                                    end=current_box.end
-                                )
-                        else:
-                            # center2 выше - box2 получает верхнюю часть пересечения
-                            if current_box.end.y > split_y:
-                                current_box = domain.Box(
-                                    start=current_box.start,
-                                    end=domain.Coords(current_box.end.x, split_y)
-                                )
-                            if box2.start.y < split_y:
-                                box2 = domain.Box(
-                                    start=domain.Coords(box2.start.x, split_y),
-                                    end=box2.end
-                                )
-                                result_bounds[j] = box2
-            
-            result_bounds.append(current_box)
-            result_contours.append(current_contour)
-        
-        return result_bounds
+                        # ВАЖНО: НЕ изменяем bounding boxes - они могут пересекаться!
+                        # Разделители только помогают определить принадлежность предиктов
+                        self._subsection_separators[(section_index, i, j)] = separator_polygon
+                        self._subsection_separator_points[(section_index, i, j)] = filtered_separator_points
 
     def _create_separator_polygon(
         self,
@@ -856,34 +717,69 @@ class WSI:
         """Определяет, к какой подсекции относится предикт.
         
         Возвращает индекс подсекции или None, если не удалось определить.
+        Использует разделители для определения принадлежности в областях пересечения.
         """
         subsections = self.extract_subsection_bounds(section_index)
         
         # Проверяем, в какую подсекцию попадает центр предикта
         pred_center = prediction.box.center()
         
+        # Сначала находим все подсекции, в которые попадает предикт
+        candidate_subsections = []
         for i, subsection in enumerate(subsections):
             # Проверяем, находится ли центр предикта в подсекции
             if (subsection.start.x <= pred_center.x <= subsection.end.x and
                 subsection.start.y <= pred_center.y <= subsection.end.y):
-                
-                # Проверяем, не находится ли предикт в разделяющей области
-                # (в этом случае нужно проверить, с какой стороны разделителя он находится)
-                for (sec_idx, sub_idx1, sub_idx2), separator in self._subsection_separators.items():
-                    if sec_idx == section_index and (sub_idx1 == i or sub_idx2 == i):
-                        # Проверяем, пересекается ли предикт с разделителем
-                        if prediction.polygon:
-                            # Если есть полигон, проверяем пересечение
-                            # TODO: более точная проверка с использованием shapely
-                            pass
-                        else:
-                            # Если нет полигона, используем центр
-                            # TODO: проверка принадлежности центра к разделителю
-                            pass
-                
-                return i
+                candidate_subsections.append(i)
         
-        return None
+        # Если предикт попадает только в одну подсекцию, возвращаем её
+        if len(candidate_subsections) == 1:
+            return candidate_subsections[0]
+        
+        # Если предикт попадает в несколько подсекций (область пересечения),
+        # используем разделители для определения принадлежности
+        if len(candidate_subsections) > 1:
+            # Проверяем пересечение с разделителями
+            for (sec_idx, sub_idx1, sub_idx2), separator in self._subsection_separators.items():
+                if sec_idx != section_index:
+                    continue
+                
+                # Проверяем, пересекается ли предикт с разделителем
+                intersects_separator = False
+                if prediction.polygon:
+                    # Если есть полигон, проверяем пересечение через shapely
+                    try:
+                        pred_poly_coords = [(c.x, c.y) for c in prediction.polygon.to_coords()]
+                        pred_shapely = ShapelyPolygon(pred_poly_coords)
+                        separator_coords = [(c.x, c.y) for c in separator.to_coords()]
+                        separator_shapely = ShapelyPolygon(separator_coords)
+                        intersects_separator = pred_shapely.intersects(separator_shapely)
+                    except Exception:
+                        # Fallback: используем центр
+                        separator_coords = [(c.x, c.y) for c in separator.to_coords()]
+                        separator_shapely = ShapelyPolygon(separator_coords)
+                        intersects_separator = separator_shapely.contains(ShapelyPolygon([(pred_center.x, pred_center.y)]))
+                else:
+                    # Если нет полигона, проверяем, находится ли центр в разделителе
+                    separator_coords = [(c.x, c.y) for c in separator.to_coords()]
+                    separator_shapely = ShapelyPolygon(separator_coords)
+                    intersects_separator = separator_shapely.contains(ShapelyPolygon([(pred_center.x, pred_center.y)]))
+                
+                if intersects_separator:
+                    # Если предикт пересекается с разделителем, определяем принадлежность
+                    # по ближайшему центру подсекции
+                    if sub_idx1 in candidate_subsections and sub_idx2 in candidate_subsections:
+                        center1 = subsections[sub_idx1].center()
+                        center2 = subsections[sub_idx2].center()
+                        
+                        dist1 = ((pred_center.x - center1.x)**2 + (pred_center.y - center1.y)**2)**0.5
+                        dist2 = ((pred_center.x - center2.x)**2 + (pred_center.y - center2.y)**2)**0.5
+                        
+                        return sub_idx1 if dist1 < dist2 else sub_idx2
+        
+        # Если не удалось определить через разделители, возвращаем первую подсекцию
+        # (или можно вернуть None, если хотим более строгую проверку)
+        return candidate_subsections[0] if candidate_subsections else None
 
     def _detect_tissue_regions_for_subsections(self, img: np.ndarray) -> list:
         """Находит отдельные крупные кусочки ткани для подсекций.

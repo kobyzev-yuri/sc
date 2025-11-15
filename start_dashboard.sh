@@ -98,3 +98,11 @@ trap cleanup SIGINT SIGTERM
 # Ожидание
 wait
 
+
+
+
+
+
+
+
+

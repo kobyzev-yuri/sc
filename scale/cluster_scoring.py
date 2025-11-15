@@ -6,6 +6,13 @@
 2. На основе PC1 центроидов кластеров
 3. На основе экспертной разметки (если доступна)
 4. На основе расстояния от "нормального" кластера
+5. На основе спектрального анализа (spectrum_projection) - интегрированный подход
+
+Интеграция со спектральным анализом:
+- Использует единую шкалу нормализации через процентили (P1/P99)
+- Проецирует кластеры на спектральную шкалу через PC1
+- Учитывает распределения внутри кластеров (медиана, процентили)
+- Классифицирует кластеры по модам из спектрального анализа
 """
 
 from pathlib import Path
@@ -23,22 +30,35 @@ class ClusterScorer:
     Класс для создания шкалы оценки патологии на основе кластеризации.
     
     Маппит кластеры на score от 0 (норма) до 1 (максимальная патология).
+    
+    Интегрирован со спектральным анализом для единой шкалы нормализации
+    и учета мод (стабильных состояний) в распределении патологий.
     """
     
     def __init__(
         self,
         method: str = "pathology_features",
         clusterer: Optional[clustering.ClusterAnalyzer] = None,
+        use_percentiles: bool = True,
+        percentile_low: float = 1.0,
+        percentile_high: float = 99.0,
     ):
         """
         Инициализация кластерного скорера.
         
         Args:
-            method: Метод маппинга ("pathology_features", "pc1_centroid", "expert_labels", "distance_from_normal")
+            method: Метод маппинга ("pathology_features", "pc1_centroid", "expert_labels", 
+                   "distance_from_normal", "spectrum_projection")
             clusterer: Обученный ClusterAnalyzer (можно передать позже)
+            use_percentiles: Использовать процентили для нормализации (устойчивость к выбросам)
+            percentile_low: Нижний процентиль для нормализации (по умолчанию 1.0)
+            percentile_high: Верхний процентиль для нормализации (по умолчанию 99.0)
         """
         self.method = method
         self.clusterer = clusterer
+        self.use_percentiles = use_percentiles
+        self.percentile_low = percentile_low
+        self.percentile_high = percentile_high
         
         # Маппинг кластеров на score
         self.cluster_to_score: Dict[int, float] = {}
@@ -46,6 +66,11 @@ class ClusterScorer:
         # Метаданные
         self.pathology_features: Optional[List[str]] = None
         self.normal_cluster: Optional[int] = None
+        
+        # Для интеграции со спектральным анализом
+        self.spectral_analyzer: Optional[object] = None  # SpectralAnalyzer
+        self.cluster_to_mode: Optional[Dict[int, str]] = None  # Классификация кластеров по модам
+        self.cluster_distributions: Optional[Dict[int, Dict]] = None  # Распределения внутри кластеров
     
     def fit(
         self,
@@ -54,6 +79,8 @@ class ClusterScorer:
         pathology_features: Optional[List[str]] = None,
         expert_labels: Optional[Dict[int, float]] = None,
         normal_cluster: Optional[int] = None,
+        spectral_analyzer: Optional[object] = None,
+        use_cluster_distribution: bool = True,
     ) -> "ClusterScorer":
         """
         Обучение маппинга кластеров на score.
@@ -64,6 +91,8 @@ class ClusterScorer:
             pathology_features: Список патологических признаков для метода "pathology_features"
             expert_labels: Словарь {cluster_id: score} для метода "expert_labels"
             normal_cluster: ID кластера с нормальными образцами для метода "distance_from_normal"
+            spectral_analyzer: Обученный SpectralAnalyzer для метода "spectrum_projection"
+            use_cluster_distribution: Учитывать распределения внутри кластеров (медиана вместо среднего)
         
         Returns:
             self
@@ -82,27 +111,67 @@ class ClusterScorer:
         
         # Выбираем метод маппинга
         if self.method == "pathology_features":
-            self._fit_pathology_features(df_with_clusters, pathology_features)
+            self._fit_pathology_features(df_with_clusters, pathology_features, use_cluster_distribution)
         elif self.method == "pc1_centroid":
-            self._fit_pc1_centroid(df_with_clusters)
+            self._fit_pc1_centroid(df_with_clusters, use_cluster_distribution)
         elif self.method == "expert_labels":
             self._fit_expert_labels(expert_labels)
         elif self.method == "distance_from_normal":
             self._fit_distance_from_normal(df_with_clusters, normal_cluster)
+        elif self.method == "spectrum_projection":
+            if spectral_analyzer is None:
+                raise ValueError("spectral_analyzer должен быть предоставлен для метода 'spectrum_projection'")
+            self.spectral_analyzer = spectral_analyzer
+            self._fit_spectrum_projection(df_with_clusters, spectral_analyzer, use_cluster_distribution)
         else:
             raise ValueError(f"Неизвестный метод: {self.method}")
         
         return self
     
+    def _normalize_with_percentiles(self, values: pd.Series) -> pd.Series:
+        """
+        Нормализация значений через процентили (устойчивость к выбросам).
+        
+        Args:
+            values: Series с значениями для нормализации
+        
+        Returns:
+            Series с нормализованными значениями [0, 1]
+        """
+        if self.use_percentiles:
+            p_low = np.percentile(values, self.percentile_low)
+            p_high = np.percentile(values, self.percentile_high)
+            
+            if p_high > p_low:
+                normalized = (values - p_low) / (p_high - p_low)
+                normalized = np.clip(normalized, 0.0, 1.0)
+            else:
+                # Если процентили совпадают, присваиваем средний score
+                normalized = pd.Series(0.5, index=values.index)
+        else:
+            # Fallback на min-max нормализацию
+            if values.max() > values.min():
+                normalized = (values - values.min()) / (values.max() - values.min())
+            else:
+                normalized = pd.Series(0.5, index=values.index)
+        
+        return normalized
+    
     def _fit_pathology_features(
         self,
         df_with_clusters: pd.DataFrame,
         pathology_features: Optional[List[str]] = None,
+        use_cluster_distribution: bool = True,
     ) -> None:
         """
         Маппинг на основе средних значений патологических признаков.
         
         Кластеры с высокими значениями патологических признаков получают высокий score.
+        
+        Args:
+            df_with_clusters: DataFrame с кластерами
+            pathology_features: Список патологических признаков
+            use_cluster_distribution: Если True, использует медиану вместо среднего (устойчивее к выбросам)
         """
         if pathology_features is None:
             # Автоматически определяем патологические признаки
@@ -121,50 +190,54 @@ class ClusterScorer:
             pathology_features = [f for f in numeric_cols if f not in ['cluster', 'image']]
             self.pathology_features = pathology_features
         
-        # Вычисляем средние значения патологических признаков по кластерам
-        cluster_means = self.clusterer.cluster_stats_["means"]
-        
-        # Суммируем патологические признаки для каждого кластера
-        available_features = [f for f in pathology_features if f in cluster_means.columns]
+        # Вычисляем статистику по кластерам
+        available_features = [f for f in pathology_features if f in df_with_clusters.columns]
         if not available_features:
             raise ValueError(f"Патологические признаки {pathology_features} не найдены в данных")
         
-        cluster_scores = cluster_means[available_features].sum(axis=1)
-        
-        # Нормализуем в диапазон [0, 1]
-        if cluster_scores.max() > cluster_scores.min():
-            cluster_scores_norm = (cluster_scores - cluster_scores.min()) / (cluster_scores.max() - cluster_scores.min())
+        # Используем медиану или среднее в зависимости от параметра
+        if use_cluster_distribution:
+            cluster_stats = df_with_clusters.groupby("cluster")[available_features].median()
         else:
-            # Если все кластеры одинаковые, присваиваем средний score
-            cluster_scores_norm = pd.Series(0.5, index=cluster_scores.index)
+            cluster_stats = self.clusterer.cluster_stats_["means"][available_features]
+        
+        # Суммируем патологические признаки для каждого кластера
+        cluster_scores = cluster_stats.sum(axis=1)
+        
+        # Нормализуем через процентили
+        cluster_scores_norm = self._normalize_with_percentiles(cluster_scores)
         
         # Маппинг кластеров на score
         self.cluster_to_score = cluster_scores_norm.to_dict()
         
-        # Шум (-1) получает минимальный score
-        if -1 in df_with_clusters["cluster"].values:
-            min_score = min(self.cluster_to_score.values()) if self.cluster_to_score else 0.0
-            self.cluster_to_score[-1] = min_score
+        # Шум (-1) не получает фиксированный score - будет обработан в transform() на основе PC1
+        # (если PC1 доступен) или получит минимальный score как fallback
     
-    def _fit_pc1_centroid(self, df_with_clusters: pd.DataFrame) -> None:
+    def _fit_pc1_centroid(
+        self, 
+        df_with_clusters: pd.DataFrame,
+        use_cluster_distribution: bool = True,
+    ) -> None:
         """
         Маппинг на основе PC1 центроидов кластеров.
         
-        Использует среднее значение PC1 для каждого кластера.
+        Использует медиану или среднее значение PC1 для каждого кластера.
+        
+        Args:
+            df_with_clusters: DataFrame с кластерами и PC1
+            use_cluster_distribution: Если True, использует медиану (устойчивее к выбросам)
         """
         if "PC1" not in df_with_clusters.columns:
             raise ValueError("Колонка PC1 не найдена. Выполните PCA анализ сначала.")
         
-        # Вычисляем средние PC1 значения по кластерам
-        cluster_pc1_means = df_with_clusters.groupby("cluster")["PC1"].mean()
-        
-        # Нормализуем в диапазон [0, 1]
-        if cluster_pc1_means.max() > cluster_pc1_means.min():
-            cluster_scores = (cluster_pc1_means - cluster_pc1_means.min()) / (
-                cluster_pc1_means.max() - cluster_pc1_means.min()
-            )
+        # Вычисляем статистику PC1 по кластерам
+        if use_cluster_distribution:
+            cluster_pc1_stats = df_with_clusters.groupby("cluster")["PC1"].median()
         else:
-            cluster_scores = pd.Series(0.5, index=cluster_pc1_means.index)
+            cluster_pc1_stats = df_with_clusters.groupby("cluster")["PC1"].mean()
+        
+        # Нормализуем через процентили
+        cluster_scores = self._normalize_with_percentiles(cluster_pc1_stats)
         
         self.cluster_to_score = cluster_scores.to_dict()
     
@@ -233,21 +306,121 @@ class ClusterScorer:
             distance = np.linalg.norm(cluster_centroid - normal_centroid)
             distances[cluster_id] = distance
         
-        # Нормализуем расстояния в [0, 1]
-        dist_values = np.array(list(distances.values()))
-        if dist_values.max() > dist_values.min():
-            dist_norm = (dist_values - dist_values.min()) / (dist_values.max() - dist_values.min())
-        else:
-            dist_norm = np.full_like(dist_values, 0.5)
+        # Нормализуем расстояния через процентили
+        dist_series = pd.Series(distances)
+        dist_norm = self._normalize_with_percentiles(dist_series)
         
-        self.cluster_to_score = {
-            cluster_id: float(score)
-            for (cluster_id, _), score in zip(distances.items(), dist_norm)
-        }
+        self.cluster_to_score = dist_norm.to_dict()
         
         # Нормальный кластер получает score 0
         if normal_cluster in self.cluster_to_score:
             self.cluster_to_score[normal_cluster] = 0.0
+    
+    def _fit_spectrum_projection(
+        self,
+        df_with_clusters: pd.DataFrame,
+        spectral_analyzer: object,
+        use_cluster_distribution: bool = True,
+    ) -> None:
+        """
+        Интегрированный подход: проецирует кластеры на спектральную шкалу.
+        
+        Использует единую шкалу нормализации из спектрального анализа (процентили P1/P99)
+        и учитывает моды (стабильные состояния) для классификации кластеров.
+        
+        Args:
+            df_with_clusters: DataFrame с кластерами
+            spectral_analyzer: Обученный SpectralAnalyzer
+            use_cluster_distribution: Если True, использует медиану PC1 кластера (устойчивее к выбросам)
+        """
+        # Проверяем, что спектральный анализатор обучен
+        if spectral_analyzer.pc1_p1 is None or spectral_analyzer.pc1_p99 is None:
+            raise ValueError(
+                "Спектральный анализатор не обучен. Вызовите fit_spectrum() сначала."
+            )
+        
+        # Вычисляем PC1 для данных (если еще не вычислено)
+        if "PC1" not in df_with_clusters.columns:
+            df_with_clusters = spectral_analyzer.transform_pca(df_with_clusters)
+        
+        # Инициализируем структуры для хранения информации о кластерах
+        self.cluster_distributions = {}
+        self.cluster_to_mode = {}
+        
+        # Для каждого кластера вычисляем статистику PC1
+        cluster_pc1_stats = {}
+        for cluster_id in df_with_clusters["cluster"].unique():
+            if cluster_id == -1:  # Пропускаем шум
+                continue
+            
+            cluster_data = df_with_clusters[df_with_clusters["cluster"] == cluster_id]["PC1"]
+            
+            if len(cluster_data) == 0:
+                continue
+            
+            # Вычисляем статистику распределения внутри кластера
+            if use_cluster_distribution:
+                cluster_center = cluster_data.median()  # Медиана (устойчивее к выбросам)
+            else:
+                cluster_center = cluster_data.mean()
+            
+            cluster_pc1_stats[cluster_id] = cluster_center
+            
+            # Сохраняем распределение кластера
+            self.cluster_distributions[cluster_id] = {
+                "median": float(cluster_data.median()),
+                "mean": float(cluster_data.mean()),
+                "p25": float(cluster_data.quantile(0.25)),
+                "p75": float(cluster_data.quantile(0.75)),
+                "std": float(cluster_data.std()),
+                "count": int(len(cluster_data)),
+            }
+        
+        # Проецируем центры кластеров на спектральную шкалу через процентили
+        pc1_p1 = spectral_analyzer.pc1_p1
+        pc1_p99 = spectral_analyzer.pc1_p99
+        
+        cluster_spectrum_scores = {}
+        for cluster_id, pc1_center in cluster_pc1_stats.items():
+            # Используем ту же формулу нормализации, что и в спектральном анализе
+            spectrum_score = (pc1_center - pc1_p1) / (pc1_p99 - pc1_p1)
+            spectrum_score = np.clip(spectrum_score, 0.0, 1.0)
+            cluster_spectrum_scores[cluster_id] = float(spectrum_score)
+        
+        self.cluster_to_score = cluster_spectrum_scores
+        
+        # Классифицируем кластеры по модам из спектрального анализа
+        if spectral_analyzer.modes:
+            mode_positions = np.array([m["position"] for m in spectral_analyzer.modes])
+            mode_labels = [m["label"] for m in spectral_analyzer.modes]
+            
+            for cluster_id, pc1_center in cluster_pc1_stats.items():
+                # Находим ближайшую моду
+                distances_to_modes = np.abs(pc1_center - mode_positions)
+                nearest_mode_idx = np.argmin(distances_to_modes)
+                
+                # Классифицируем кластер по ближайшей моде
+                self.cluster_to_mode[cluster_id] = mode_labels[nearest_mode_idx]
+        else:
+            # Если мод нет, классифицируем по спектральной шкале (как в спектральном анализе)
+            for cluster_id, spectrum_score in cluster_spectrum_scores.items():
+                if spectrum_score < 0.2:
+                    self.cluster_to_mode[cluster_id] = "normal"
+                elif spectrum_score < 0.5:
+                    self.cluster_to_mode[cluster_id] = "mild"
+                elif spectrum_score < 0.8:
+                    self.cluster_to_mode[cluster_id] = "moderate"
+                else:
+                    self.cluster_to_mode[cluster_id] = "severe"
+        
+        # Шум (-1) обрабатывается отдельно: каждый шумовой образец получает score на основе его PC1
+        # Не присваиваем фиксированный score для кластера -1, так как шумовые образцы могут иметь разные PC1
+        # В transform() шумовые образцы будут получать score индивидуально на основе их PC1
+        if -1 in df_with_clusters["cluster"].values:
+            # Сохраняем информацию для обработки шума в transform()
+            self.spectral_analyzer = spectral_analyzer
+            self.pc1_p1 = pc1_p1
+            self.pc1_p99 = pc1_p99
     
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -270,7 +443,86 @@ class ClusterScorer:
         # Маппинг кластеров на score
         df_result["cluster_score"] = df_result["cluster"].map(self.cluster_to_score)
         
-        # Заполняем NaN значениями (для неизвестных кластеров)
+        # Обработка шума (-1): вычисляем score на основе реального PC1 значения (если доступно)
+        noise_mask = df_result["cluster"] == -1
+        if noise_mask.any():
+            # Пытаемся вычислить PC1 для шума, если его нет
+            if "PC1" not in df_result.columns:
+                # Если PC1 нет, пытаемся вычислить через spectral_analyzer
+                if hasattr(self, 'spectral_analyzer') and self.spectral_analyzer is not None:
+                    df_result = self.spectral_analyzer.transform_pca(df_result)
+            
+            # Если PC1 доступен, вычисляем score для шума на основе их PC1
+            if "PC1" in df_result.columns:
+                # Вычисляем score для шума на основе их PC1 через спектральную шкалу
+                if hasattr(self, 'pc1_p1') and hasattr(self, 'pc1_p99'):
+                    pc1_p1 = self.pc1_p1
+                    pc1_p99 = self.pc1_p99
+                else:
+                    # Fallback: используем процентили из всех данных (включая шум)
+                    pc1_all = df_result["PC1"]
+                    pc1_p1 = pc1_all.quantile(0.01)
+                    pc1_p99 = pc1_all.quantile(0.99)
+                
+                # Вычисляем score для каждого шумового образца индивидуально
+                noise_pc1 = df_result.loc[noise_mask, "PC1"]
+                if len(noise_pc1) > 0 and pc1_p99 > pc1_p1:
+                    noise_scores = (noise_pc1 - pc1_p1) / (pc1_p99 - pc1_p1)
+                    noise_scores = np.clip(noise_scores, 0.0, 1.0)
+                    df_result.loc[noise_mask, "cluster_score"] = noise_scores.values
+                else:
+                    # Fallback: минимальный score
+                    min_score = min(self.cluster_to_score.values()) if self.cluster_to_score else 0.0
+                    df_result.loc[noise_mask, "cluster_score"] = min_score
+                
+                # Классифицируем шум по модам (если доступны)
+                if self.cluster_to_mode is not None and hasattr(self, 'spectral_analyzer') and self.spectral_analyzer is not None:
+                    if self.spectral_analyzer.modes:
+                        mode_positions = np.array([m["position"] for m in self.spectral_analyzer.modes])
+                        mode_labels = [m["label"] for m in self.spectral_analyzer.modes]
+                        
+                        for idx in df_result[noise_mask].index:
+                            pc1_val = df_result.loc[idx, "PC1"]
+                            distances_to_modes = np.abs(pc1_val - mode_positions)
+                            nearest_mode_idx = np.argmin(distances_to_modes)
+                            df_result.loc[idx, "cluster_mode"] = mode_labels[nearest_mode_idx]
+                    else:
+                        # Классификация по спектральной шкале
+                        for idx in df_result[noise_mask].index:
+                            score = df_result.loc[idx, "cluster_score"]
+                            if score < 0.2:
+                                df_result.loc[idx, "cluster_mode"] = "normal"
+                            elif score < 0.5:
+                                df_result.loc[idx, "cluster_mode"] = "mild"
+                            elif score < 0.8:
+                                df_result.loc[idx, "cluster_mode"] = "moderate"
+                            else:
+                                df_result.loc[idx, "cluster_mode"] = "severe"
+                else:
+                    # Классификация по спектральной шкале (fallback)
+                    for idx in df_result[noise_mask].index:
+                        score = df_result.loc[idx, "cluster_score"]
+                        if score < 0.2:
+                            df_result.loc[idx, "cluster_mode"] = "normal"
+                        elif score < 0.5:
+                            df_result.loc[idx, "cluster_mode"] = "mild"
+                        elif score < 0.8:
+                            df_result.loc[idx, "cluster_mode"] = "moderate"
+                        else:
+                            df_result.loc[idx, "cluster_mode"] = "severe"
+            else:
+                # Если PC1 недоступен, используем минимальный score как fallback
+                min_score = min(self.cluster_to_score.values()) if self.cluster_to_score else 0.0
+                df_result.loc[noise_mask, "cluster_score"] = min_score
+                df_result.loc[noise_mask, "cluster_mode"] = "noise"
+        
+        # Добавляем классификацию по модам (если доступна) для обычных кластеров
+        if self.cluster_to_mode is not None:
+            # Заполняем только те, где еще нет значения (не шум)
+            non_noise_mask = df_result["cluster"] != -1
+            df_result.loc[non_noise_mask, "cluster_mode"] = df_result.loc[non_noise_mask, "cluster"].map(self.cluster_to_mode)
+        
+        # Заполняем NaN значениями (для неизвестных кластеров, не шум)
         if df_result["cluster_score"].isna().any():
             default_score = np.mean(list(self.cluster_to_score.values()))
             df_result["cluster_score"] = df_result["cluster_score"].fillna(default_score)
@@ -307,6 +559,24 @@ class ClusterScorer:
         """
         return pd.Series(self.cluster_to_score).sort_values()
     
+    def get_cluster_modes(self) -> Optional[Dict[int, str]]:
+        """
+        Возвращает классификацию кластеров по модам (если используется spectrum_projection).
+        
+        Returns:
+            Словарь {cluster_id: mode_label} или None
+        """
+        return self.cluster_to_mode
+    
+    def get_cluster_distributions(self) -> Optional[Dict[int, Dict]]:
+        """
+        Возвращает распределения внутри кластеров (если используется spectrum_projection).
+        
+        Returns:
+            Словарь {cluster_id: {median, mean, p25, p75, std, count}} или None
+        """
+        return self.cluster_distributions
+    
     def save(self, path: Union[str, Path]) -> None:
         """
         Сохранение обученной модели.
@@ -323,6 +593,11 @@ class ClusterScorer:
                 "cluster_to_score": self.cluster_to_score,
                 "pathology_features": self.pathology_features,
                 "normal_cluster": self.normal_cluster,
+                "use_percentiles": self.use_percentiles,
+                "percentile_low": self.percentile_low,
+                "percentile_high": self.percentile_high,
+                "cluster_to_mode": self.cluster_to_mode,
+                "cluster_distributions": self.cluster_distributions,
             }, f)
     
     @classmethod
@@ -341,10 +616,17 @@ class ClusterScorer:
         with open(path, 'rb') as f:
             data = pickle.load(f)
         
-        scorer = cls(method=data["method"])
+        scorer = cls(
+            method=data["method"],
+            use_percentiles=data.get("use_percentiles", True),
+            percentile_low=data.get("percentile_low", 1.0),
+            percentile_high=data.get("percentile_high", 99.0),
+        )
         scorer.cluster_to_score = data["cluster_to_score"]
         scorer.pathology_features = data.get("pathology_features")
         scorer.normal_cluster = data.get("normal_cluster")
+        scorer.cluster_to_mode = data.get("cluster_to_mode")
+        scorer.cluster_distributions = data.get("cluster_distributions")
         
         return scorer
 

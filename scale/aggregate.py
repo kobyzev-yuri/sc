@@ -26,10 +26,22 @@ def aggregate_predictions_from_dict(
 
     Returns:
         Словарь со статистикой: {class_name_count: int, class_name_area: float, ...}
+    
+    Исключает:
+        - Surface epithelium (структурный элемент, не используется как признак)
+        - Muscularis mucosae (структурный элемент, не используется как признак)
+        - White space (служебный класс, не используется как признак)
     """
     stats = {"image": image_name}
+    
+    # Список классов для исключения из абсолютных признаков
+    excluded_classes = ["Surface epithelium", "Muscularis mucosae", "White space"]
 
     for cls_name, pred_list in predictions.items():
+        # Исключаем структурные элементы
+        if cls_name in excluded_classes:
+            continue
+            
         if len(pred_list) == 0:
             stats[f"{cls_name}_count"] = 0
             stats[f"{cls_name}_area"] = 0.0
@@ -94,21 +106,33 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
         - {class}_relative_count = count / Crypts_count
         - {class}_relative_area = area / Crypts_area
         - {class}_mean_relative_area = relative_area / count
+    
+    Исключает:
+        - Crypts (используется как нормализатор)
+        - Surface epithelium (структурный элемент, не используется как признак)
+        - Muscularis mucosae (структурный элемент, не используется как признак)
     """
     df_new = pd.DataFrame()
     df_new["image"] = df["image"]
+
+    # Список классов для исключения
+    excluded_classes = ["Crypts", "Surface epithelium", "Muscularis mucosae", "White space"]
 
     area_cols = [col for col in df.columns if col.endswith("_area")]
     count_cols = [col for col in df.columns if col.endswith("_count")]
 
     for col in count_cols:
-        if col != "Crypts_count" and "Crypts_count" in df.columns:
+        # Исключаем Crypts и другие структурные элементы
+        class_name = col.replace("_count", "")
+        if class_name not in excluded_classes and "Crypts_count" in df.columns:
             df_new[col.replace("count", "relative_count")] = (
                 df[col] / df["Crypts_count"]
             )
 
     for col in area_cols:
-        if col != "Crypts_area" and "Crypts_area" in df.columns:
+        # Исключаем Crypts и другие структурные элементы
+        class_name = col.replace("_area", "")
+        if class_name not in excluded_classes and "Crypts_area" in df.columns:
             relative_area = df[col] / df["Crypts_area"]
             df_new[col.replace("area", "relative_area")] = relative_area
 
@@ -128,19 +152,29 @@ def create_relative_features(df: pd.DataFrame) -> pd.DataFrame:
     return df_new
 
 
-def select_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
+def select_all_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Выбирает важные колонки признаков для анализа.
+    Выбирает ВСЕ доступные колонки признаков для анализа (старый подход).
+    
+    Используется когда нужен полный набор признаков без фильтрации по loadings.
 
     Args:
         df: DataFrame с относительными признаками
 
     Returns:
         DataFrame с отобранными колонками
+    
+    Примечание о количестве признаков:
+    - Относительные признаки: 10 классов × 3 (relative_count + relative_area + mean_relative_area) = 30 признаков
+      Классы: Mild, Dysplasia, Moderate, Meta, Plasma Cells, Neutrophils, EoE, Enterocytes, Granulomas, Paneth
+    - Абсолютные признаки: (10 классов + 1 Crypts) × 2 (count + area) = 22 признака
+      Исключены: Surface epithelium, Muscularis mucosae (структурные элементы, не используются как признаки)
+    - Относительных признаков больше (30 vs 22), потому что для каждого класса создается 3 признака вместо 2
     """
     # Формируем список признаков парами: relative_count, relative_area, mean_relative_area
     # ВАЖНО: Полный набор признаков для каждого патологического класса улучшает качество GMM аппроксимации
-    # Исключаем структурные элементы без count (Surface epithelium, Muscularis mucosae)
+    # Исключаем структурные элементы: Surface epithelium и Muscularis mucosae
+    # (они уже исключены в create_relative_features, но здесь явно перечисляем только нужные классы)
     cols = [
         "image",
         # Mild: count, area, mean_area
@@ -185,10 +219,105 @@ def select_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Paneth_mean_relative_area",
         # Структурные элементы (только area, без count):
         # Surface epithelium и Muscularis mucosae - это области, а не отдельные объекты
-        "Surface epithelium_relative_area",
-        "Muscularis mucosae_relative_area",
+        # ИСКЛЮЧЕНЫ из признаков: используются только для разбора по слоям, не как признаки
+        # "Surface epithelium_relative_area",
+        # "Muscularis mucosae_relative_area",
     ]
 
     available_cols = [col for col in cols if col in df.columns]
     return df[available_cols]
+
+
+def select_feature_columns(
+    df: pd.DataFrame,
+    use_positive_loadings: bool = True,
+    min_loading: float = 0.05,
+    exclude_paneth: bool = True,
+) -> pd.DataFrame:
+    """
+    Выбирает важные колонки признаков для анализа.
+    
+    По умолчанию использует только признаки с положительными loadings в PC1,
+    что улучшает объясненную дисперсию и корректность классификации.
+    
+    Args:
+        df: DataFrame с относительными признаками
+        use_positive_loadings: Если True (по умолчанию), использует только признаки 
+                              с положительными loadings. Если False, использует все признаки.
+        min_loading: Минимальный loading для включения признака (используется если use_positive_loadings=True)
+        exclude_paneth: Если True, исключает Paneth признаки (используется если use_positive_loadings=True)
+
+    Returns:
+        DataFrame с отобранными колонками
+    
+    Примеры:
+        # Использовать положительные loadings (по умолчанию)
+        df_features = select_feature_columns(df)
+        
+        # Использовать все признаки (старый подход)
+        df_features = select_feature_columns(df, use_positive_loadings=False)
+        
+        # Использовать положительные loadings с другим порогом
+        df_features = select_feature_columns(df, min_loading=0.1)
+    """
+    if use_positive_loadings:
+        return select_positive_loadings_features(df, min_loading=min_loading, exclude_paneth=exclude_paneth)
+    else:
+        return select_all_feature_columns(df)
+
+
+def select_positive_loadings_features(
+    df: pd.DataFrame,
+    min_loading: float = 0.05,
+    exclude_paneth: bool = True,
+) -> pd.DataFrame:
+    """
+    Выбирает только признаки с положительными loadings в PC1.
+    
+    Это альтернативный подход к select_feature_columns(), который использует
+    только признаки, которые увеличивают PC1 (т.е. коррелируют с патологией).
+    
+    Args:
+        df: DataFrame с относительными признаками
+        min_loading: Минимальный loading для включения признака (по умолчанию 0.05)
+        exclude_paneth: Если True, исключает Paneth признаки (по умолчанию True)
+        
+    Returns:
+        DataFrame с отобранными колонками
+        
+    Примечание:
+        Эта функция требует обучения PCA для определения loadings, поэтому
+        она должна использоваться на полном наборе данных для обучения.
+        Для новых данных используйте те же признаки, что были отобраны при обучении.
+    """
+    # Сначала получаем все доступные признаки (используем select_all_feature_columns чтобы избежать рекурсии)
+    df_all_features = select_all_feature_columns(df)
+    feature_cols = [c for c in df_all_features.columns if c != "image"]
+    
+    if len(feature_cols) == 0:
+        return df_all_features
+    
+    # Обучаем PCA для получения loadings
+    from . import pca_scoring
+    pca_scorer = pca_scoring.PCAScorer()
+    pca_scorer.fit(df_all_features, feature_cols)
+    
+    # Получаем loadings
+    loadings = pca_scorer.get_feature_importance()
+    
+    # Фильтруем только положительные loadings выше порога
+    positive_features = [
+        feat for feat, loading in loadings.items()
+        if loading > min_loading
+    ]
+    
+    # Исключаем Paneth если нужно
+    if exclude_paneth:
+        positive_features = [f for f in positive_features if 'Paneth' not in f]
+    
+    # Возвращаем DataFrame с только положительными признаками
+    cols_to_keep = ["image"] + positive_features
+    available_cols = [col for col in cols_to_keep if col in df_all_features.columns]
+    
+    return df_all_features[available_cols]
 

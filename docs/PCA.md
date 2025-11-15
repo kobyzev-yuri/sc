@@ -343,3 +343,6 @@ explained_variance = pca.explained_variance_[0]  # Дисперсия, объя�
 - [docs/CLUSTER_SCORING.md](CLUSTER_SCORING.md) - Методы маппинга кластеров на шкалу 0-1
 - [docs/KDE_GMM_EXPLANATION.md](KDE_GMM_EXPLANATION.md) - Объяснение спектрального анализа с KDE и GMM
 
+
+
+

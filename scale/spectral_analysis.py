@@ -66,7 +66,11 @@ class SpectralAnalyzer:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if "image" in numeric_cols:
                 numeric_cols.remove("image")
-            feature_columns = numeric_cols
+            # Исключаем структурные элементы, используемые только для разбора по слоям
+            feature_columns = [
+                col for col in numeric_cols 
+                if not any(x in col.lower() for x in ['surface epithelium', 'muscularis mucosae'])
+            ]
 
         self.feature_columns = feature_columns
         X = df[feature_columns].fillna(0).values
@@ -177,8 +181,9 @@ class SpectralAnalyzer:
         # Создание сетки для оценки плотности
         x_min, x_max = values.min(), values.max()
         x_range = x_max - x_min
+        # Уменьшаем количество точек для ускорения (500 вместо 1000)
         x_grid = np.linspace(
-            x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000
+            x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=500
         )
         density = kde(x_grid)
 
@@ -317,7 +322,8 @@ class SpectralAnalyzer:
             kde = stats.gaussian_kde(pc1_values)
             x_min, x_max = pc1_values.min(), pc1_values.max()
             x_range = x_max - x_min
-            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+            # Уменьшаем количество точек для ускорения (500 вместо 1000)
+            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=500)
             kde_density = kde(x_grid)
         else:
             return pd.DataFrame()
@@ -703,7 +709,8 @@ class SpectralAnalyzer:
         # Создаем сетку для построения
         x_min, x_max = pc1_values.min(), pc1_values.max()
         x_range = x_max - x_min
-        x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+        # Уменьшаем количество точек для ускорения (500 вместо 1000)
+        x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=500)
         
         # Создаем график
         fig, ax = plt.subplots(figsize=(14, 8))
@@ -891,7 +898,8 @@ class SpectralAnalyzer:
             kde = stats.gaussian_kde(pc1_values)
             x_min, x_max = pc1_values.min(), pc1_values.max()
             x_range = x_max - x_min
-            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000)
+            # Уменьшаем количество точек для ускорения (500 вместо 1000)
+            x_grid = np.linspace(x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=500)
             density = kde(x_grid)
             
             ax.plot(x_grid, density, 'b-', linewidth=2, label='KDE', alpha=0.8)
@@ -980,7 +988,8 @@ class SpectralAnalyzer:
         
         if len(pc1_spectrum) > 1:
             kde = stats.gaussian_kde(pc1_spectrum)
-            x_grid = np.linspace(0, 1, num=1000)
+            # Уменьшаем количество точек для ускорения (500 вместо 1000)
+            x_grid = np.linspace(0, 1, num=500)
             density = kde(x_grid)
             # Масштабируем плотность обратно пропорционально масштабу оси X
             density_scaled = density * scale_factor
@@ -1045,7 +1054,8 @@ class SpectralAnalyzer:
         
         sorted_indices = np.argsort(gmm_spectrum_positions)
         
-        x_grid = np.linspace(0, 1, num=1000)
+        # Уменьшаем количество точек для ускорения (500 вместо 1000)
+        x_grid = np.linspace(0, 1, num=500)
         component_colors = plt.cm.Set3(np.linspace(0, 1, len(gmm_means)))
         
         for idx in sorted_indices:
@@ -1055,7 +1065,8 @@ class SpectralAnalyzer:
             color = component_colors[idx]
             
             # Вычисляем плотность на нормализованной шкале
-            gaussian_density_norm = weight * stats.norm.pdf(x_grid, mean_norm, std_norm)
+            from scipy import stats as scipy_stats
+            gaussian_density_norm = weight * scipy_stats.norm.pdf(x_grid, mean_norm, std_norm)
             # Масштабируем плотность обратно пропорционально масштабу оси X
             gaussian_density_scaled = gaussian_density_norm * scale_factor
             
@@ -1129,8 +1140,9 @@ class SpectralAnalyzer:
             kde = stats.gaussian_kde(pc1_values)
             x_min, x_max = pc1_values.min(), pc1_values.max()
             x_range = x_max - x_min
+            # Уменьшаем количество точек для ускорения (500 вместо 1000)
             x_grid = np.linspace(
-                x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=1000
+                x_min - 0.1 * x_range, x_max + 0.1 * x_range, num=500
             )
             density = kde(x_grid)
 
@@ -1251,13 +1263,13 @@ class SpectralAnalyzer:
             )
         
         comment_text = (
-            "📊 KDE (синяя линия): непараметрическая оценка плотности распределения PC1. "
+            "[KDE] (синяя линия): непараметрическая оценка плотности распределения PC1. "
             "Показывает реальную форму распределения без предположений о модели. "
             "Пики = области с высокой концентрацией образцов.\n\n"
-            "🔴 Mode (красные пунктирные линии): стабильные состояния (локальные максимумы плотности). "
+            "[Mode] (красные пунктирные линии): стабильные состояния (локальные максимумы плотности). "
             "Каждая мода = группа образцов с похожими характеристиками. "
             "Моды помогают выявить основные патологические состояния.\n\n"
-            "🟣 GMM (фиолетовая линия): параметрическая модель смеси гауссовых распределений. "
+            "[GMM] (фиолетовая линия): параметрическая модель смеси гауссовых распределений. "
             f"{gmm_method_text}"
             "Аппроксимирует распределение через несколько компонентов (состояний). "
             "Центры компонентов отмечены вертикальными линиями. "

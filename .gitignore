@@ -1,6 +1,9 @@
 # Модели
-models/*.pt
-models/*.pkl
+models/
+*.pt
+*.pkl
+*.engine
+*.onnx
 
 # Данные
 *.tiff
@@ -12,8 +15,12 @@ wsi/
 results/visualization/
 experiments/
 
-# Тестовые данные (исключение для results/predictions)
-!results/predictions/*.json
+# Данные предиктов и тестов
+results/predictions/
+test/
+results_old/
+scale_results/
+scale_results_old/
 
 # Python
 __pycache__/

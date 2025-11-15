@@ -135,18 +135,67 @@ def render_dashboard():
     with st.sidebar:
         st.header("📁 Загрузка данных")
 
-        # Опция загрузки из директории
-        use_default_data = st.checkbox(
-            "Использовать данные из results/predictions", value=False
+        # Выбор источника данных
+        data_source = st.radio(
+            "Источник данных",
+            ["Загрузить файлы", "Использовать директорию"],
+            index=1 if "use_directory" in st.session_state and st.session_state.use_directory else 0
         )
+        
+        use_default_data = (data_source == "Использовать директорию")
+        st.session_state.use_directory = use_default_data
 
         if use_default_data:
-            predictions_dir = Path("results/predictions")
+            # Предустановленные директории
+            default_dirs = [
+                "results/predictions",
+                "test/predictions",
+                "scale_results/predictions",
+            ]
+            
+            # Поиск существующих директорий
+            existing_dirs = []
+            for dir_path in default_dirs:
+                p = Path(dir_path)
+                if p.exists() and list(p.glob("*.json")):
+                    json_count = len(list(p.glob("*.json")))
+                    existing_dirs.append(f"{dir_path} ({json_count} файлов)")
+            
+            if existing_dirs:
+                # Выбор из существующих директорий
+                selected_dir_label = st.selectbox(
+                    "Выберите директорию",
+                    existing_dirs,
+                    index=0
+                )
+                # Извлекаем путь из строки (убираем " (N файлов)")
+                predictions_dir_str = selected_dir_label.split(" (")[0]
+            else:
+                predictions_dir_str = default_dirs[0]
+            
+            # Возможность ввести свой путь
+            custom_dir = st.text_input(
+                "Или введите свой путь к директории",
+                value="",
+                placeholder="например: my_data/predictions"
+            )
+            
+            if custom_dir:
+                predictions_dir_str = custom_dir
+            
+            # Сохраняем выбранную директорию в session_state
+            st.session_state.predictions_dir = predictions_dir_str
+            predictions_dir = Path(predictions_dir_str)
+            
             if predictions_dir.exists():
                 json_files = list(predictions_dir.glob("*.json"))
-                st.info(f"Найдено {len(json_files)} файлов в results/predictions")
+                if json_files:
+                    st.success(f"✓ Найдено {len(json_files)} файлов в {predictions_dir}")
+                else:
+                    st.warning(f"⚠ В директории {predictions_dir} нет JSON файлов")
+                    use_default_data = False
             else:
-                st.warning("Директория results/predictions не найдена")
+                st.error(f"❌ Директория {predictions_dir} не найдена")
                 use_default_data = False
 
         uploaded_files = None
@@ -203,6 +252,36 @@ def render_dashboard():
         use_relative_features = st.checkbox(
             "Использовать относительные признаки", value=True
         )
+        
+        # Режим выбора признаков
+        if use_relative_features:
+            st.markdown("#### 🎯 Режим выбора признаков")
+            feature_selection_mode = st.radio(
+                "Выберите режим отбора признаков:",
+                ["Только положительные loadings (рекомендуется)", "Все признаки"],
+                index=0,
+                help="Положительные loadings улучшают объясненную дисперсию PC1 и корректность классификации"
+            )
+            use_positive_loadings = (feature_selection_mode == "Только положительные loadings (рекомендуется)")
+            
+            if use_positive_loadings:
+                min_loading = st.slider(
+                    "Минимальный loading",
+                    0.0, 0.2, 0.05, 0.01,
+                    help="Признаки с loading выше этого значения будут включены"
+                )
+                exclude_paneth = st.checkbox(
+                    "Исключить Paneth признаки",
+                    value=True,
+                    help="Paneth клетки имеют обратную корреляцию с патологией"
+                )
+            else:
+                min_loading = 0.05
+                exclude_paneth = True
+        else:
+            use_positive_loadings = False
+            min_loading = 0.05
+            exclude_paneth = True
 
         use_spectral_analysis = st.checkbox(
             "Применить спектральный анализ", value=True
@@ -299,11 +378,27 @@ def render_dashboard():
 
     # Загрузка данных
     if use_default_data:
-        predictions_dir = Path("results/predictions")
+        # Получаем выбранную директорию из session_state
+        if "predictions_dir" in st.session_state and st.session_state.predictions_dir:
+            predictions_dir = Path(st.session_state.predictions_dir)
+        else:
+            # Если не выбрана, используем первую доступную или дефолтную
+            default_dirs = ["results/predictions", "test/predictions", "scale_results/predictions"]
+            predictions_dir = None
+            for dir_path in default_dirs:
+                p = Path(dir_path)
+                if p.exists() and list(p.glob("*.json")):
+                    predictions_dir = p
+                    st.session_state.predictions_dir = str(p)
+                    break
+            if predictions_dir is None:
+                predictions_dir = Path("results/predictions")
+                st.session_state.predictions_dir = "results/predictions"
+        
         if predictions_dir.exists():
             json_files = list(predictions_dir.glob("*.json"))
             if json_files:
-                with st.spinner("Загрузка предсказаний из results/predictions..."):
+                with st.spinner(f"Загрузка предсказаний из {predictions_dir}..."):
                     predictions = {}
                     for json_file in json_files:
                         try:
@@ -336,7 +431,12 @@ def render_dashboard():
 
             if use_relative_features:
                 df_features = aggregate.create_relative_features(df)
-                df_features = aggregate.select_feature_columns(df_features)
+                df_features = aggregate.select_feature_columns(
+                    df_features,
+                    use_positive_loadings=use_positive_loadings,
+                    min_loading=min_loading,
+                    exclude_paneth=exclude_paneth
+                )
             else:
                 # Для абсолютных признаков используем только df, но убеждаемся, что нет относительных признаков
                 df_features = df.copy()
@@ -877,8 +977,13 @@ def render_dashboard():
                         st.session_state.selected_features_distribution = selected_features
                         st.rerun()
                 
-                # Используем сохраненные значения
+                # Используем сохраненные значения, но фильтруем только существующие колонки
                 selected_features = st.session_state.selected_features_distribution
+                # Фильтруем только те признаки, которые действительно есть в DataFrame
+                selected_features = [f for f in selected_features if f in df_features.columns]
+                # Обновляем session_state с валидными признаками
+                if len(selected_features) != len(st.session_state.selected_features_distribution):
+                    st.session_state.selected_features_distribution = selected_features
 
                 if selected_features:
                     cols = st.columns(2)
@@ -889,16 +994,22 @@ def render_dashboard():
                         with col:
                             st.subheader(feature)
                             fig, ax = plt.subplots(figsize=(8, 4))
-                            ax.hist(
-                                df_features[feature].dropna(),
-                                bins=20,
-                                alpha=0.7,
-                                edgecolor="black",
-                            )
-                            ax.set_xlabel(feature)
-                            ax.set_ylabel("Frequency")
-                            ax.grid(True, alpha=0.3)
-                            st.pyplot(fig)
+                            # Дополнительная проверка на случай если колонка все еще отсутствует
+                            if feature in df_features.columns:
+                                ax.hist(
+                                    df_features[feature].dropna(),
+                                    bins=20,
+                                    alpha=0.7,
+                                    edgecolor="black",
+                                )
+                                ax.set_xlabel(feature)
+                                ax.set_ylabel("Frequency")
+                                ax.grid(True, alpha=0.3)
+                                st.pyplot(fig)
+                            else:
+                                st.warning(f"Признак '{feature}' отсутствует в данных")
+                else:
+                    st.info("Выберите признаки для визуализации из списка выше.")
 
         with tab3:
             st.header("Спектральный анализ")

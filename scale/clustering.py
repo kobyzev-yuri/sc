@@ -85,10 +85,12 @@ class ClusterAnalyzer:
         df: pd.DataFrame,
         feature_columns: Optional[List[str]] = None,
         use_pca: bool = True,
-        pca_components: int = 10,
+        pca_components: Optional[int] = None,
         min_cluster_size: int = 2,
         min_samples: Optional[int] = None,
         cluster_selection_epsilon: float = 0.0,
+        external_pca: Optional[object] = None,
+        external_scaler: Optional[object] = None,
     ) -> "ClusterAnalyzer":
         """
         Обучение кластеризатора на данных.
@@ -98,10 +100,15 @@ class ClusterAnalyzer:
             feature_columns: Список признаков для кластеризации. 
                            Если None, используются все числовые колонки кроме "image"
             use_pca: Использовать ли PCA для снижения размерности перед кластеризацией
-            pca_components: Число компонент PCA (если use_pca=True)
+            pca_components: Число компонент PCA (если use_pca=True и external_pca=None).
+                           Если external_pca передан, это число компонент для использования из него.
             min_cluster_size: Минимальный размер кластера для HDBSCAN
             min_samples: Минимальное число образцов для HDBSCAN (если None, = min_cluster_size)
             cluster_selection_epsilon: Параметр для HDBSCAN (0.0 = автоматический выбор)
+            external_pca: Внешний обученный PCA объект (например, из SpectralAnalyzer).
+                         Если передан, используется вместо создания нового PCA.
+            external_scaler: Внешний обученный StandardScaler (например, из SpectralAnalyzer).
+                           Если передан, используется вместо создания нового scaler.
         
         Returns:
             self
@@ -113,7 +120,11 @@ class ClusterAnalyzer:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if "image" in numeric_cols:
                 numeric_cols.remove("image")
-            feature_columns = numeric_cols
+            # Исключаем структурные элементы, используемые только для разбора по слоям
+            feature_columns = [
+                col for col in numeric_cols 
+                if not any(x in col.lower() for x in ['surface epithelium', 'muscularis mucosae'])
+            ]
         
         self.feature_columns = feature_columns
         
@@ -121,17 +132,42 @@ class ClusterAnalyzer:
         X = df[feature_columns].fillna(0).values
         
         # Нормализация
-        X_scaled = self.scaler.fit_transform(X)
+        if external_scaler is not None:
+            X_scaled = external_scaler.transform(X)
+            self.scaler = external_scaler
+        else:
+            X_scaled = self.scaler.fit_transform(X)
         
         # PCA для снижения размерности (опционально)
-        if use_pca and X_scaled.shape[1] > pca_components:
-            pca = PCA(n_components=pca_components, random_state=self.random_state)
-            X_scaled = pca.fit_transform(X_scaled)
-            self.pca = pca
-            self.use_pca = True
+        if use_pca:
+            if external_pca is not None:
+                # Используем внешний PCA (из спектрального анализа)
+                if pca_components is not None:
+                    # Используем только первые pca_components компонент из внешнего PCA
+                    X_scaled = external_pca.transform(X_scaled)[:, :pca_components]
+                    self.pca_components_used = pca_components
+                else:
+                    # Используем все компоненты из внешнего PCA
+                    X_scaled = external_pca.transform(X_scaled)
+                    self.pca_components_used = X_scaled.shape[1]
+                self.pca = external_pca
+                self.use_pca = True
+                self.use_external_pca = True
+            elif X_scaled.shape[1] > (pca_components or 10):
+                # Создаем новый PCA
+                pca = PCA(n_components=pca_components or 10, random_state=self.random_state)
+                X_scaled = pca.fit_transform(X_scaled)
+                self.pca = pca
+                self.use_pca = True
+                self.use_external_pca = False
+            else:
+                self.pca = None
+                self.use_pca = False
+                self.use_external_pca = False
         else:
             self.pca = None
             self.use_pca = False
+            self.use_external_pca = False
         
         # Кластеризация
         if self.method == "hdbscan":
@@ -243,6 +279,9 @@ class ClusterAnalyzer:
         # PCA (если использовался)
         if self.use_pca and self.pca is not None:
             X_scaled = self.pca.transform(X_scaled)
+            # Если использовался external_pca с ограничением компонент, нужно ограничить
+            if hasattr(self, 'use_external_pca') and self.use_external_pca and hasattr(self, 'pca_components_used'):
+                X_scaled = X_scaled[:, :self.pca_components_used]
         
         # Предсказание кластеров
         if self.method == "hdbscan":
