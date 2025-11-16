@@ -44,7 +44,9 @@ def export_to_dashboard_config(
         config_filename = "feature_selection_config_absolute.json"
     
     # Путь для dashboard (в директории scale/)
-    dashboard_config_path = Path(__file__).parent / config_filename
+    # Используем родительскую директорию проекта для доступа к scale/
+    project_root = Path(__file__).parent.parent
+    dashboard_config_path = project_root / "scale" / config_filename
     
     # Путь для сохранения копии (в output_dir)
     backup_config_path = output_dir / config_filename
@@ -366,4 +368,98 @@ def export_complete_results(
         print(f"✓ Все доступные признаки сохранены: {all_features_path}")
     
     return saved_files
+
+
+def export_to_experiment_format(
+    selected_features: List[str],
+    output_dir: Path,
+    method_name: str,
+    metrics: Dict,
+    df_results: Optional[pd.DataFrame] = None,
+    analyzer: Optional[object] = None,
+    use_relative_features: bool = True,
+    metadata: Optional[Dict] = None,
+) -> Path:
+    """
+    Экспортирует результаты подбора признаков в формат experiments для использования в dashboard.
+    
+    Формат experiments включает:
+    - results.csv - DataFrame с результатами спектрального анализа
+    - spectral_analyzer.pkl - обученная модель (если предоставлена)
+    - metadata.json - метаданные эксперимента
+    - best_features_*.json - конфигурация признаков
+    
+    Args:
+        selected_features: Список отобранных признаков
+        output_dir: Директория для сохранения эксперимента
+        method_name: Название метода подбора
+        metrics: Словарь с метриками качества
+        df_results: DataFrame с результатами спектрального анализа (опционально)
+        analyzer: Обученный SpectralAnalyzer (опционально)
+        use_relative_features: Использовать относительные признаки
+        metadata: Дополнительные метаданные (опционально)
+        
+    Returns:
+        Путь к директории эксперимента
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # 1. Сохраняем конфигурацию признаков в формате best_features_*.json
+    json_path = output_dir / f"best_features_{timestamp}.json"
+    config = {
+        'method': method_name,
+        'selected_features': selected_features,
+        'metrics': {
+            'score': float(metrics.get('score', 0)),
+            'separation': float(metrics.get('separation', 0)),
+            'mean_pc1_norm_mod': float(metrics.get('mean_pc1_norm_mod', 0)),
+            'explained_variance': float(metrics.get('explained_variance', 0)),
+            'mean_pc1_mod': float(metrics.get('mean_pc1_mod', 0)),
+            'mean_pc1_normal': float(metrics.get('mean_pc1_normal', 0)),
+        },
+        'timestamp': timestamp,
+        'use_relative_features': use_relative_features,
+    }
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print(f"✓ Конфигурация признаков сохранена: {json_path}")
+    
+    # 2. Сохраняем результаты спектрального анализа (если предоставлены)
+    if df_results is not None:
+        csv_path = output_dir / "results.csv"
+        df_results.to_csv(csv_path, index=False)
+        print(f"✓ Результаты сохранены: {csv_path}")
+    
+    # 3. Сохраняем модель (если предоставлена)
+    if analyzer is not None:
+        model_path = output_dir / "spectral_analyzer.pkl"
+        analyzer.save(model_path)
+        print(f"✓ Модель сохранена: {model_path}")
+    
+    # 4. Сохраняем метаданные
+    if metadata is None:
+        metadata = {}
+    
+    metadata.update({
+        "timestamp": datetime.now().isoformat(),
+        "method": method_name,
+        "n_features": len(selected_features),
+        "use_relative_features": use_relative_features,
+        "metrics": config['metrics'],
+    })
+    
+    if df_results is not None:
+        metadata["n_samples"] = len(df_results)
+    
+    metadata_path = output_dir / "metadata.json"
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    print(f"✓ Метаданные сохранены: {metadata_path}")
+    
+    print(f"\n✅ Эксперимент сохранен в формате experiments: {output_dir}")
+    
+    return output_dir
 

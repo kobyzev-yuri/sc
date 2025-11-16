@@ -26,8 +26,14 @@ from sklearn.linear_model import LogisticRegression, LassoCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
 
-from . import aggregate, pca_scoring
-from . import feature_selection_export
+import sys
+from pathlib import Path
+
+# Добавляем путь к scale для импорта модулей
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from scale import aggregate, pca_scoring
+from model_development import feature_selection_export
 
 
 def identify_sample_type(image_name: str) -> str:

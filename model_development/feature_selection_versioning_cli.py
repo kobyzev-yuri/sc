@@ -14,7 +14,12 @@ import argparse
 from pathlib import Path
 import pandas as pd
 
-from scale.feature_selection_versioning import (
+# Добавляем путь к проекту для импорта
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from model_development.feature_selection_versioning import (
     FeatureSelectionVersionManager,
     list_all_experiments,
     export_experiment_to_dashboard,

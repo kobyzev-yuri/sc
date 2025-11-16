@@ -9,12 +9,18 @@
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
 import pandas as pd
 
-from . import feature_selection_versioning
+# Добавляем путь к model_development для импорта
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from model_development import feature_selection_versioning
 
 
 def list_available_experiments(experiments_dir: Path = Path("experiments")) -> List[Dict]:

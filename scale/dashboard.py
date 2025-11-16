@@ -35,7 +35,7 @@ except ImportError as e:
     ) from e
 
 from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, preprocessing, eda
-from scale.feature_selection_automated import evaluate_feature_set, identify_sample_type
+from model_development.feature_selection_automated import evaluate_feature_set, identify_sample_type
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
