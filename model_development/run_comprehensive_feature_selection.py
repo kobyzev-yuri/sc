@@ -104,41 +104,41 @@ def run_phase_2_parameter_variations(predictions_dir: str):
 
 def main():
     """Главная функция"""
-    if len(sys.argv) > 1:
-        predictions_dir = sys.argv[1]
-    else:
-        predictions_dir = "results/predictions"
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Систематический поиск лучших признаков")
+    parser.add_argument("predictions_dir", nargs="?", default="results/predictions",
+                       help="Директория с JSON файлами предсказаний")
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3], default=1,
+                       help="Фаза для выполнения: 1 - базовое сравнение, 2 - вариации параметров, 3 - все фазы")
+    
+    args = parser.parse_args()
+    predictions_dir = args.predictions_dir
+    phase = args.phase
     
     print("="*70)
     print("СИСТЕМАТИЧЕСКИЙ ПОИСК ЛУЧШИХ ПРИЗНАКОВ")
     print("="*70)
     print(f"Директория с данными: {predictions_dir}")
     print(f"Время начала: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
+
     # Проверяем наличие данных
     predictions_path = Path(predictions_dir)
     if not predictions_path.exists():
         print(f"❌ Ошибка: директория {predictions_dir} не найдена")
         sys.exit(1)
-    
+
     json_files = list(predictions_path.glob("*.json"))
     if not json_files:
         print(f"❌ Ошибка: в директории {predictions_dir} нет JSON файлов")
         sys.exit(1)
-    
+
     print(f"✓ Найдено {len(json_files)} JSON файлов")
+    print(f"✓ Выбрана фаза: {phase}")
     
-    # Запрашиваем фазу
-    print("\nВыберите фазу для выполнения:")
-    print("1. Фаза 1: Базовое сравнение всех методов")
-    print("2. Фаза 2: Вариации параметров (требует модификации кода)")
-    print("3. Все фазы")
-    
-    choice = input("\nВведите номер (1-3) или Enter для фазы 1: ").strip()
-    
-    if choice == "2":
+    if phase == 2:
         run_phase_2_parameter_variations(predictions_dir)
-    elif choice == "3":
+    elif phase == 3:
         run_phase_1_basic_comparison(predictions_dir)
         run_phase_2_parameter_variations(predictions_dir)
     else:

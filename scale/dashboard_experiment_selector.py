@@ -23,7 +23,7 @@ if str(project_root) not in sys.path:
 from model_development import feature_selection_versioning
 
 
-def list_available_experiments(experiments_dir: Path = Path("experiments"), use_tracker: bool = True) -> List[Dict]:
+def list_available_experiments(experiments_dir: Path = Path("experiments"), use_tracker: bool = True, top_n: Optional[int] = None) -> List[Dict]:
     """
     Возвращает список доступных экспериментов.
     
@@ -33,6 +33,7 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
     Args:
         experiments_dir: Базовая директория с экспериментами
         use_tracker: Использовать ExperimentTracker (по умолчанию True)
+        top_n: Максимальное число экспериментов для возврата (None = все, по умолчанию 3 для dashboard)
         
     Returns:
         Список словарей с информацией об экспериментах, отсортированный по score (лучшие первые)
@@ -46,7 +47,7 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
             from model_development.experiment_tracker import ExperimentTracker
             
             tracker = ExperimentTracker(experiments_dir)
-            df_experiments = tracker.list_experiments(sort_by="score", limit=None)
+            df_experiments = tracker.list_experiments(sort_by="score", limit=top_n)
             
             if len(df_experiments) > 0:
                 # Преобразуем DataFrame в список словарей
@@ -68,7 +69,7 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
                             'aggregation_version': row.get('aggregation_version', 'unknown'),
                         })
                 
-                # Трекер уже отсортировал по score, возвращаем как есть
+                # Трекер уже отсортировал по score, возвращаем как есть (уже ограничено top_n)
                 return experiments
         except Exception as e:
             # Если трекер недоступен, используем fallback
@@ -106,6 +107,10 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
     
     # Сортируем по score (лучшие первые)
     experiments.sort(key=lambda x: x.get('score', 0), reverse=True)
+    
+    # Ограничиваем до top_n, если указано
+    if top_n is not None and top_n > 0:
+        experiments = experiments[:top_n]
     
     return experiments
 

@@ -157,3 +157,4 @@ print(f"Объясненная дисперсия: {pca_all.pca.explained_varian
 
 
 
+

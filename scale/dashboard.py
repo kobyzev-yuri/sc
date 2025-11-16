@@ -527,7 +527,7 @@ def render_dashboard():
             value="",
             placeholder="например: my_data/inference",
             key="custom_inference_dir"
-        )
+            )
         
         if custom_inference_dir:
             inference_dir_str = custom_inference_dir
@@ -1360,23 +1360,6 @@ def render_dashboard():
                 
                 # НЕ устанавливаем все признаки по умолчанию - пользователь должен выбрать явно
                 
-                # ============================================
-                # ПРОСТОЙ ИНТЕРФЕЙС: Один список со всеми признаками
-                # ============================================
-                st.markdown("### 📋 Список всех признаков")
-                st.info("💡 Отметьте признаки для использования. Кнопка 'Применить признаки' появится только при изменении признаков.")
-                
-                # Показываем количество выбранных
-                selected_count = len([f for f in st.session_state.selected_features if f in feature_cols])
-                st.caption(f"Выбрано: {selected_count} из {len(feature_cols)} признаков")
-                
-                # Показываем все доступные признаки
-                with st.expander("🔍 Отладка: Все доступные признаки", expanded=False):
-                    st.write(f"Всего признаков в feature_cols: {len(feature_cols)}")
-                    st.write("Список всех признаков:")
-                    for feat in sorted(feature_cols):
-                        st.text(f"  • {feat}")
-                
                 # Группируем признаки по категориям для удобства отображения
                 pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
                     ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
@@ -1493,54 +1476,47 @@ def render_dashboard():
                             for feat in sorted(unselected_features):
                                 st.text(f"  ☐ {feat}")
                     
-                    # Проверяем, были ли изменены признаки
-                    current_selected_from_dict = [f for f, selected in selected_features_dict.items() if selected]
-                    current_selected_from_state = st.session_state.get("selected_features", [])
-                    features_changed = set(current_selected_from_dict) != set(current_selected_from_state)
-                    
-                    # Кнопка применения - всегда показываем, но делаем неактивной если признаки не изменены
-                    if features_changed:
-                        apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
-                    else:
-                        # Если признаки не изменены, показываем неактивную кнопку и информационное сообщение
-                        st.info("💡 Признаки не изменены. PCA будет автоматически пересчитан при необходимости.")
-                        apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary", disabled=True)
+                    # Кнопка применения - всегда активна
+                    apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
                     
                     if apply_button:
                         # Применяем выбранные чекбоксы
                         selected_features_list = [f for f, selected in selected_features_dict.items() if selected]
                         
-                        # Сохраняем выбранные признаки
-                        st.session_state.selected_features = selected_features_list
-                        st.session_state.features_applied = True
-                        
-                        # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
-                        if "analyzer" in st.session_state and st.session_state.analyzer.gmm is not None:
-                            # Очищаем GMM из анализатора
-                            st.session_state.analyzer.gmm = None
-                        # Очищаем кэш спектра
-                        if "df_spectrum" in st.session_state:
-                            del st.session_state.df_spectrum
-                        if "spectrum_cache_key" in st.session_state:
-                            del st.session_state.spectrum_cache_key
-                        # Очищаем кэш качества GMM
-                        cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
-                        for key in cache_keys_to_remove:
-                            del st.session_state[key]
-                        
-                        # Сохраняем в конфигурационный файл
-                        if save_feature_config(selected_features_list):
-                            st.success("✅ Конфигурация сохранена в файл")
-                            # Показываем информацию об исходном эксперименте (если есть)
-                            try:
-                                with open(config_file, 'r', encoding='utf-8') as f:
-                                    saved_config = json.load(f)
-                                if saved_config.get("source_experiment"):
-                                    st.info(f"💡 Исходный эксперимент: **{saved_config['source_experiment']}** (не изменен)")
-                            except Exception:
-                                pass
-                        
-                        st.rerun()
+                        if len(selected_features_list) == 0:
+                            st.error("❌ Необходимо выбрать хотя бы один признак!")
+                        else:
+                            # Сохраняем выбранные признаки
+                            st.session_state.selected_features = selected_features_list
+                            st.session_state.features_applied = True
+                            
+                            # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
+                            if "analyzer" in st.session_state and st.session_state.analyzer.gmm is not None:
+                                # Очищаем GMM из анализатора
+                                st.session_state.analyzer.gmm = None
+                            # Очищаем кэш спектра
+                            if "df_spectrum" in st.session_state:
+                                del st.session_state.df_spectrum
+                            if "spectrum_cache_key" in st.session_state:
+                                del st.session_state.spectrum_cache_key
+                            # Очищаем кэш качества GMM
+                            cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
+                            for key in cache_keys_to_remove:
+                                del st.session_state[key]
+                            
+                            # Сохраняем в конфигурационный файл
+                            if save_feature_config(selected_features_list):
+                                st.success("✅ Конфигурация сохранена в файл")
+                                # Показываем информацию об исходном эксперименте (если есть)
+                                try:
+                                    with open(config_file, 'r', encoding='utf-8') as f:
+                                        saved_config = json.load(f)
+                                    if saved_config.get("source_experiment"):
+                                        st.info(f"💡 Исходный эксперимент: **{saved_config['source_experiment']}** (не изменен)")
+                                except Exception:
+                                    pass
+                            
+                            st.rerun()
                 
                 # Показываем текущий статус
                 st.markdown("---")
@@ -3795,7 +3771,7 @@ def render_dashboard():
         with tab_inference:
             st.header("🔮 Инференс для новых WSI")
             st.markdown("Примените обученную модель к новым WSI из выбранной директории.")
-            
+                
             # Проверяем, есть ли обученная модель
             if "analyzer" not in st.session_state or st.session_state.get("analyzer") is None:
                 # Пробуем загрузить модель из эксперимента, если используется эксперимент
@@ -3896,7 +3872,7 @@ def render_dashboard():
                                         inference_rows.append(pred_stats)
                                     
                                     df_inference = pd.DataFrame(inference_rows)
-                                    
+                        
                                     # Создаем признаки (используем ТОЧНО те же настройки, что и для обучения модели)
                                     if use_relative_features_for_inference:
                                         df_inference_features_full = aggregate.create_relative_features(df_inference)
@@ -3913,7 +3889,7 @@ def render_dashboard():
                                     
                                     # Показываем информацию о созданных признаках
                                     st.caption(f"Создано признаков: {len(df_inference_features_full.columns) - 1} (тип: {'относительные' if use_relative_features_for_inference else 'абсолютные'})")
-                                    
+                        
                                     # ВАЖНО: Используем ТОЧНО те же признаки, что были при обучении модели
                                     # Это гарантирует идентичные результаты между обучением и инференсом
                                     if analyzer.feature_columns is not None:
@@ -3935,7 +3911,7 @@ def render_dashboard():
                                         df_inference_features = df_inference_features_full[["image"] + required_features].copy()
                                         
                                         st.info(f"ℹ️ Используется {len(required_features)} признаков из обученной модели (те же, что при обучении)")
-                                        
+                        
                                         # Преобразуем через PCA
                                         df_inference_pca = analyzer.transform_pca(df_inference_features)
                                         
@@ -3951,7 +3927,7 @@ def render_dashboard():
                                     else:
                                         st.error("❌ Модель не содержит информацию о признаках")
                                         df_inference_spectrum = None
-                                        
+                            
                             except Exception as e:
                                 st.error(f"❌ Ошибка при инференсе: {e}")
                                 import traceback
@@ -3970,7 +3946,7 @@ def render_dashboard():
                         # График с точками инференса
                         st.markdown("**📊 Распределение WSI на спектральной шкале (с точками инференса)**")
                         fig_inference, ax_inference = plt.subplots(figsize=(14, 6))
-                        
+                    
                         # Гистограмма для обучающих данных (если есть)
                         if df_spectrum_train is not None:
                             spectrum_values_train = df_spectrum_train["PC1_spectrum"].dropna().values
@@ -4038,7 +4014,7 @@ def render_dashboard():
                                     bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7, edgecolor='red', linewidth=1.5),
                                     fontweight='bold'
                                 )
-                        
+                                        
                         # Отметка мод (если есть обучающие данные)
                         if analyzer.modes and df_spectrum_train is not None:
                             for mode in analyzer.modes:
@@ -4087,7 +4063,7 @@ def render_dashboard():
                             ),
                             use_container_width=True,
                         )
-                        
+                            
                         # Скачивание результатов инференса
                         csv_inference = df_inference_spectrum[inference_display_cols].to_csv(index=False)
                         st.download_button(

@@ -542,6 +542,195 @@ class FeatureSelector:
         
         return best_features, best_metrics
     
+    def method_combined_mi_then_forward(
+        self,
+        candidate_features: List[str],
+        mi_k: int = 25,
+        forward_min_improvement: float = 0.01,
+    ) -> Tuple[List[str], Dict[str, float]]:
+        """
+        Комбинированный метод: Mutual Information → Forward Selection.
+        
+        Этап 1: MI фильтрует до топ-k признаков
+        Этап 2: Forward Selection выбирает финальные признаки из отфильтрованных
+        
+        Args:
+            candidate_features: Список кандидатных признаков
+            mi_k: Число признаков для отбора через MI
+            forward_min_improvement: Минимальное улучшение для Forward Selection
+            
+        Returns:
+            Кортеж (отобранные признаки, метрики)
+        """
+        print(f"\n=== Комбинированный метод: MI → Forward Selection ===")
+        print(f"Этап 1: Mutual Information фильтрует до {mi_k} признаков...")
+        
+        # Этап 1: MI фильтрация
+        mi_features, mi_metrics = self.method_4_mutual_information(
+            candidate_features,
+            k=mi_k
+        )
+        
+        print(f"✓ Отфильтровано до {len(mi_features)} признаков через MI")
+        print(f"Этап 2: Forward Selection на отфильтрованных признаках...")
+        
+        # Этап 2: Forward Selection на отфильтрованных признаках
+        final_features, final_metrics = self.method_1_forward_selection(
+            mi_features,
+            min_improvement=forward_min_improvement
+        )
+        
+        print(f"✓ Финальный набор: {len(final_features)} признаков")
+        
+        return final_features, final_metrics
+    
+    def method_combined_forward_then_backward(
+        self,
+        candidate_features: List[str],
+        forward_max_features: int = 30,
+        forward_min_improvement: float = 0.01,
+        backward_min_improvement: float = 0.01,
+    ) -> Tuple[List[str], Dict[str, float]]:
+        """
+        Комбинированный метод: Forward Selection → Backward Elimination.
+        
+        Этап 1: Forward Selection до max_features признаков
+        Этап 2: Backward Elimination из Forward признаков
+        
+        Args:
+            candidate_features: Список кандидатных признаков
+            forward_max_features: Максимальное число признаков для Forward
+            forward_min_improvement: Минимальное улучшение для Forward
+            backward_min_improvement: Минимальное улучшение для Backward
+            
+        Returns:
+            Кортеж (отобранные признаки, метрики)
+        """
+        print(f"\n=== Комбинированный метод: Forward → Backward ===")
+        print(f"Этап 1: Forward Selection до {forward_max_features} признаков...")
+        
+        # Этап 1: Forward Selection
+        forward_features, forward_metrics = self.method_1_forward_selection(
+            candidate_features,
+            max_features=forward_max_features,
+            min_improvement=forward_min_improvement
+        )
+        
+        print(f"✓ Forward Selection выбрал {len(forward_features)} признаков")
+        print(f"Этап 2: Backward Elimination из Forward признаков...")
+        
+        # Этап 2: Backward Elimination
+        final_features, final_metrics = self.method_2_backward_elimination(
+            forward_features,
+            min_improvement=backward_min_improvement
+        )
+        
+        print(f"✓ Финальный набор: {len(final_features)} признаков")
+        
+        return final_features, final_metrics
+    
+    def method_combined_forward_backward_intersection(
+        self,
+        candidate_features: List[str],
+        forward_min_improvement: float = 0.01,
+        backward_min_improvement: float = 0.01,
+    ) -> Tuple[List[str], Dict[str, float]]:
+        """
+        Комбинированный метод: Forward + Backward (пересечение).
+        
+        Находит общие признаки, выбранные обоими методами.
+        
+        Args:
+            candidate_features: Список кандидатных признаков
+            forward_min_improvement: Минимальное улучшение для Forward
+            backward_min_improvement: Минимальное улучшение для Backward
+            
+        Returns:
+            Кортеж (отобранные признаки, метрики)
+        """
+        print(f"\n=== Комбинированный метод: Forward ∩ Backward (пересечение) ===")
+        print(f"Этап 1: Forward Selection...")
+        
+        # Forward Selection
+        forward_features, _ = self.method_1_forward_selection(
+            candidate_features,
+            min_improvement=forward_min_improvement
+        )
+        
+        print(f"✓ Forward Selection выбрал {len(forward_features)} признаков")
+        print(f"Этап 2: Backward Elimination...")
+        
+        # Backward Elimination
+        backward_features, _ = self.method_2_backward_elimination(
+            candidate_features,
+            min_improvement=backward_min_improvement
+        )
+        
+        print(f"✓ Backward Elimination выбрал {len(backward_features)} признаков")
+        
+        # Пересечение
+        intersection_features = list(set(forward_features) & set(backward_features))
+        
+        print(f"✓ Пересечение: {len(intersection_features)} общих признаков")
+        
+        # Оцениваем пересечение
+        metrics = evaluate_feature_set(
+            self.df, intersection_features, self.mod_samples, self.normal_samples
+        )
+        
+        return intersection_features, metrics
+    
+    def method_combined_forward_backward_union(
+        self,
+        candidate_features: List[str],
+        forward_min_improvement: float = 0.01,
+        backward_min_improvement: float = 0.01,
+    ) -> Tuple[List[str], Dict[str, float]]:
+        """
+        Комбинированный метод: Forward + Backward (объединение).
+        
+        Объединяет признаки, выбранные обоими методами.
+        
+        Args:
+            candidate_features: Список кандидатных признаков
+            forward_min_improvement: Минимальное улучшение для Forward
+            backward_min_improvement: Минимальное улучшение для Backward
+            
+        Returns:
+            Кортеж (отобранные признаки, метрики)
+        """
+        print(f"\n=== Комбинированный метод: Forward ∪ Backward (объединение) ===")
+        print(f"Этап 1: Forward Selection...")
+        
+        # Forward Selection
+        forward_features, _ = self.method_1_forward_selection(
+            candidate_features,
+            min_improvement=forward_min_improvement
+        )
+        
+        print(f"✓ Forward Selection выбрал {len(forward_features)} признаков")
+        print(f"Этап 2: Backward Elimination...")
+        
+        # Backward Elimination
+        backward_features, _ = self.method_2_backward_elimination(
+            candidate_features,
+            min_improvement=backward_min_improvement
+        )
+        
+        print(f"✓ Backward Elimination выбрал {len(backward_features)} признаков")
+        
+        # Объединение
+        union_features = list(set(forward_features) | set(backward_features))
+        
+        print(f"✓ Объединение: {len(union_features)} признаков")
+        
+        # Оцениваем объединение
+        metrics = evaluate_feature_set(
+            self.df, union_features, self.mod_samples, self.normal_samples
+        )
+        
+        return union_features, metrics
+    
     def compare_all_methods(
         self,
         candidate_features: List[str],
@@ -697,9 +886,18 @@ def run_feature_selection_analysis(
             df_aggregated=df,  # Агрегированные данные (абсолютные признаки)
             df_features=df_features,  # Относительные признаки
             df_all_features=df_all,  # Все доступные признаки
-            train_set=train_set or str(predictions_dir),  # Train set для трекера
-            aggregation_version=aggregation_version or "current",  # Версия агрегации
         )
+        
+        # Регистрируем эксперимент в трекере после экспорта
+        try:
+            from model_development.experiment_tracker import register_experiment_from_directory
+            register_experiment_from_directory(
+                experiment_dir=output_dir,
+                train_set=train_set or str(predictions_dir),
+                aggregation_version=aggregation_version or "current",
+            )
+        except Exception as e:
+            print(f"⚠️ Не удалось зарегистрировать эксперимент в трекере: {e}")
         
         print("\n" + "="*60)
         print("ЭКСПОРТ ЗАВЕРШЕН")

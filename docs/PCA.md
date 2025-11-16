@@ -348,3 +348,4 @@ explained_variance = pca.explained_variance_[0]  # Дисперсия, объя�
 
 
 
+

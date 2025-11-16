@@ -226,3 +226,4 @@ df_pca = pca_scorer.fit_transform(df_selected)
 - `scale/feature_selection_automated.py` - исходный код
 
 
+
