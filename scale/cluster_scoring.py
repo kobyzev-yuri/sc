@@ -103,8 +103,20 @@ class ClusterScorer:
         if self.clusterer is None:
             raise ValueError("ClusterAnalyzer не предоставлен. Передайте clusterer в fit() или __init__()")
         
-        if self.clusterer.cluster_stats_ is None:
+        # Проверяем, что кластеризатор обучен (labels_ не None)
+        # cluster_stats_ может быть None, если все образцы - шум, но это не значит, что кластеризатор не обучен
+        if self.clusterer.labels_ is None:
             raise ValueError("Кластеризатор не обучен. Вызовите clusterer.fit() сначала.")
+        
+        # Предупреждаем, если все образцы - шум
+        if self.clusterer.cluster_stats_ is None:
+            n_noise = (self.clusterer.labels_ == -1).sum()
+            n_total = len(self.clusterer.labels_)
+            if n_noise == n_total:
+                raise ValueError(
+                    f"Кластеризация не нашла кластеры: все {n_total} образцов помечены как шум. "
+                    "Попробуйте изменить параметры кластеризации (уменьшите min_cluster_size, увеличьте число PCA компонент)."
+                )
         
         # Применяем кластеризацию к данным
         df_with_clusters = self.clusterer.transform(df)

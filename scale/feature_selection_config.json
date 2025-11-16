@@ -1,0 +1,33 @@
+{
+  "selected_features": [
+    "Crypts_area",
+    "Crypts_count",
+    "Dysplasia_area",
+    "Dysplasia_count",
+    "Enterocytes_area",
+    "Enterocytes_count",
+    "EoE_area",
+    "EoE_count",
+    "Granulomas_area",
+    "Granulomas_count",
+    "Meta_area",
+    "Meta_count",
+    "Mild_area",
+    "Mild_count",
+    "Moderate_area",
+    "Moderate_count",
+    "Muscularis mucosae_area",
+    "Muscularis mucosae_count",
+    "Neutrophils_area",
+    "Neutrophils_count",
+    "Paneth_area",
+    "Paneth_count",
+    "Plasma Cells_area",
+    "Plasma Cells_count",
+    "Surface epithelium_area",
+    "Surface epithelium_count"
+  ],
+  "description": "Выбранные признаки для построения шкалы патологии",
+  "last_updated": "2025-11-15T23:34:51.188121"
+}
+

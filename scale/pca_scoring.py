@@ -46,11 +46,9 @@ class PCAScorer:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if "image" in numeric_cols:
                 numeric_cols.remove("image")
-            # Исключаем структурные элементы, используемые только для разбора по слоям
-            feature_columns = [
-                col for col in numeric_cols 
-                if not any(x in col.lower() for x in ['surface epithelium', 'muscularis mucosae'])
-            ]
+            # Используем все числовые колонки (включая структурные, если они есть)
+            # Структурные признаки исключаются только если явно не переданы в feature_columns
+            feature_columns = numeric_cols
 
         self.feature_columns = feature_columns
         X = df[feature_columns].fillna(0).values

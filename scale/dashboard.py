@@ -35,6 +35,7 @@ except ImportError as e:
     ) from e
 
 from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda, cluster_comparison, cluster_scoring, method_comparison
+from scale.feature_selection_automated import evaluate_feature_set, identify_sample_type
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -138,12 +139,14 @@ def render_dashboard():
         # Выбор источника данных
         data_source = st.radio(
             "Источник данных",
-            ["Загрузить файлы", "Использовать директорию"],
-            index=1 if "use_directory" in st.session_state and st.session_state.use_directory else 0
+            ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"],
+            index=1 if "use_directory" in st.session_state and st.session_state.use_directory else (2 if "use_experiment" in st.session_state and st.session_state.use_experiment else 0)
         )
         
         use_default_data = (data_source == "Использовать директорию")
+        use_experiment_data = (data_source == "Использовать данные из эксперимента")
         st.session_state.use_directory = use_default_data
+        st.session_state.use_experiment = use_experiment_data
 
         if use_default_data:
             # Предустановленные директории
@@ -197,9 +200,98 @@ def render_dashboard():
             else:
                 st.error(f"❌ Директория {predictions_dir} не найдена")
                 use_default_data = False
+        
+        # Выбор эксперимента для загрузки данных
+        experiment_data = None
+        experiment_name = None
+        if use_experiment_data:
+            try:
+                from scale import dashboard_experiment_selector
+            except ImportError:
+                from . import dashboard_experiment_selector
+            
+            # Получаем список доступных экспериментов
+            experiments = dashboard_experiment_selector.list_available_experiments()
+            
+            if len(experiments) > 0:
+                # Создаем список для выбора
+                experiment_options = [
+                    f"{exp['name']} (score={exp['score']:.4f}, method={exp['method']})"
+                    for exp in experiments
+                ]
+                
+                selected_exp_label = st.selectbox(
+                    "Выберите эксперимент",
+                    experiment_options,
+                    index=0,
+                    help="Выберите эксперимент для загрузки сохраненных данных"
+                )
+                
+                # Извлекаем имя эксперимента
+                experiment_name = selected_exp_label.split(" (")[0]
+                
+                # Проверяем, изменился ли эксперимент
+                previous_experiment = st.session_state.get("experiment_name", None)
+                experiment_changed = (previous_experiment is not None and previous_experiment != experiment_name)
+                
+                # Загружаем данные из эксперимента
+                experiment_dir = Path("experiments") / experiment_name
+                
+                # Ищем CSV файлы с данными
+                aggregated_files = list(experiment_dir.glob("aggregated_data_*.csv"))
+                relative_files = list(experiment_dir.glob("relative_features_*.csv"))
+                all_features_files = list(experiment_dir.glob("all_features_*.csv"))
+                
+                if aggregated_files or relative_files or all_features_files:
+                    st.success(f"✓ Найдены данные эксперимента: {experiment_name}")
+                    
+                    # Если эксперимент изменился, очищаем кэш данных
+                    if experiment_changed:
+                        # Очищаем кэш данных
+                        keys_to_remove = [
+                            "df", "df_features", "df_features_full", "df_features_for_selection",
+                            "df_all_features", "df_results", "selected_features",
+                            "analyzer", "df_spectrum", "clusterer", "cluster_scorer",
+                            "df_with_cluster_scores", "comparison"
+                        ]
+                        for key in keys_to_remove:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        
+                        # Очищаем кэш спектра и GMM
+                        cache_keys_to_remove = [key for key in st.session_state.keys() 
+                                                if key.startswith("df_aggregated_") or 
+                                                   key.startswith("df_features_full_") or
+                                                   key.startswith("predictions_") or
+                                                   key.startswith("gmm_quality_")]
+                        for key in cache_keys_to_remove:
+                            del st.session_state[key]
+                        
+                        st.info(f"🔄 Эксперимент изменен: {previous_experiment} → {experiment_name}. Данные будут перезагружены.")
+                    
+                    # Сохраняем информацию об эксперименте
+                    st.session_state.experiment_name = experiment_name
+                    st.session_state.experiment_dir = str(experiment_dir)
+                    
+                    # Показываем доступные файлы
+                    with st.expander("📁 Доступные данные эксперимента"):
+                        if aggregated_files:
+                            st.text(f"✓ Агрегированные данные: {len(aggregated_files)} файл(ов)")
+                        if relative_files:
+                            st.text(f"✓ Относительные признаки: {len(relative_files)} файл(ов)")
+                        if all_features_files:
+                            st.text(f"✓ Все доступные признаки: {len(all_features_files)} файл(ов)")
+                else:
+                    st.warning(f"⚠️ В эксперименте {experiment_name} не найдены сохраненные данные")
+                    st.info("💡 Используйте 'Использовать директорию' для загрузки из JSON файлов")
+                    use_experiment_data = False
+            else:
+                st.warning("⚠️ Не найдено экспериментов с сохраненными данными")
+                st.info("💡 Сначала запустите подбор признаков для создания эксперимента")
+                use_experiment_data = False
 
         uploaded_files = None
-        if not use_default_data:
+        if not use_default_data and not use_experiment_data:
             uploaded_files = st.file_uploader(
                 "Загрузите JSON файлы с предсказаниями",
                 type=["json"],
@@ -239,7 +331,8 @@ def render_dashboard():
             **Почему относительных признаков больше?**
             - Для каждого класса создается 3 относительных признака вместо 2 абсолютных
             - Добавлен `mean_relative_area` - средний размер объекта относительно крипты
-            - Исключены: Crypts (нормализатор), Surface epithelium, Muscularis mucosae (структурные элементы)
+            - Исключены: Crypts (нормализатор, используется для нормализации)
+            - Структурные элементы (Surface epithelium, Muscularis mucosae) могут быть включены как признаки, если выбраны явно
             
             **Рекомендация:**
             - Начать с относительных признаков (по умолчанию)
@@ -408,8 +501,184 @@ def render_dashboard():
                 # Сохраняем в кэш
                 st.session_state[predictions_cache_key] = predictions
 
-    # Обработка данных с кэшированием
-    if predictions and len(predictions) > 0:
+    # Загрузка данных из эксперимента (если выбран этот источник)
+    if use_experiment_data and "experiment_dir" in st.session_state:
+        experiment_dir = Path(st.session_state.experiment_dir)
+        current_experiment = st.session_state.get("experiment_name", None)
+        
+        # Проверяем, изменился ли эксперимент или нужно перезагрузить данные
+        previous_experiment = st.session_state.get("last_loaded_experiment", None)
+        experiment_changed = (previous_experiment is not None and previous_experiment != current_experiment)
+        need_reload = (
+            experiment_changed or
+            "df" not in st.session_state or 
+            st.session_state.get("df") is None or
+            st.session_state.get("experiment_name") != current_experiment
+        )
+        
+        # Ищем последние файлы с данными
+        aggregated_files = sorted(experiment_dir.glob("aggregated_data_*.csv"))
+        relative_files = sorted(experiment_dir.glob("relative_features_*.csv"))
+        all_features_files = sorted(experiment_dir.glob("all_features_*.csv"))
+        
+        # Если эксперимент изменился, очищаем кэш
+        if experiment_changed:
+            keys_to_remove = [
+                "df", "df_features", "df_features_full", "df_features_for_selection",
+                "df_all_features", "df_results", "selected_features",
+                "analyzer", "df_spectrum", "clusterer", "cluster_scorer",
+                "df_with_cluster_scores", "comparison", "experiment_config_cache"
+            ]
+            for key in keys_to_remove:
+                if key in st.session_state:
+                    del st.session_state[key]
+            
+            # Очищаем кэш спектра и GMM
+            cache_keys_to_remove = [key for key in st.session_state.keys() 
+                                    if key.startswith("df_aggregated_") or 
+                                       key.startswith("df_features_full_") or
+                                       key.startswith("predictions_") or
+                                       key.startswith("gmm_quality_")]
+            for key in cache_keys_to_remove:
+                del st.session_state[key]
+            
+            # Очищаем ключи для отслеживания типа признаков и загруженного эксперимента
+            features_type_keys = [key for key in st.session_state.keys() 
+                                 if key.startswith("features_type_") or key.startswith("loaded_experiment_")]
+            for key in features_type_keys:
+                del st.session_state[key]
+        
+        if (aggregated_files or relative_files or all_features_files) and need_reload:
+            with st.spinner(f"Загрузка данных из эксперимента {current_experiment}..."):
+                try:
+                    if aggregated_files:
+                        df_from_experiment = pd.read_csv(aggregated_files[-1])
+                    else:
+                        df_from_experiment = None
+                    
+                    if relative_files:
+                        df_features_from_experiment = pd.read_csv(relative_files[-1])
+                    else:
+                        df_features_from_experiment = None
+                    
+                    if all_features_files:
+                        df_all_from_experiment = pd.read_csv(all_features_files[-1])
+                    else:
+                        df_all_from_experiment = None
+                    
+                    # Используем данные из эксперимента
+                    if df_from_experiment is not None:
+                        df = df_from_experiment.copy()
+                        
+                        # Если есть относительные признаки, используем их
+                        if df_features_from_experiment is not None:
+                            df_features_full = df_features_from_experiment.copy()
+                        else:
+                            # Создаем относительные признаки из агрегированных данных
+                            df_features_full = aggregate.create_relative_features(df)
+                        
+                        # Если есть все доступные признаки, используем их
+                        if df_all_from_experiment is not None:
+                            df_all_features = df_all_from_experiment.copy()
+                        else:
+                            df_all_features = aggregate.select_all_feature_columns(df_features_full)
+                        
+                        st.success(f"✓ Данные загружены из эксперимента: {st.session_state.get('experiment_name', 'unknown')}")
+                        st.info("💡 JSON файлы не загружаются - используются сохраненные агрегированные данные")
+                        
+                        # Загружаем конфигурацию признаков из эксперимента
+                        try:
+                            from scale import dashboard_experiment_selector
+                            experiment_config = dashboard_experiment_selector.load_experiment_features(current_experiment)
+                            if experiment_config:
+                                # Сохраняем полную конфигурацию эксперимента в session_state
+                                st.session_state.experiment_config_cache = experiment_config
+                                
+                                if experiment_config.get('features'):
+                                    # Загружаем признаки из эксперимента
+                                    experiment_features = experiment_config['features']
+                                    # Фильтруем только существующие признаки
+                                    valid_features = [f for f in experiment_features if f in df_features_full.columns]
+                                    if valid_features:
+                                        st.session_state.selected_features = valid_features
+                                        st.info(f"💡 Загружены признаки из эксперимента: {len(valid_features)} признаков")
+                        except Exception as e:
+                            st.warning(f"⚠️ Не удалось загрузить конфигурацию из эксперимента: {e}")
+                        
+                        # Сохраняем информацию о загруженном эксперименте
+                        st.session_state.last_loaded_experiment = current_experiment
+                        
+                        # Обрабатываем данные для дальнейшей работы (аналогично обычной загрузке)
+                        if use_relative_features:
+                            # Используем полный набор для интерфейса выбора признаков
+                            df_features_for_selection = df_features_full.copy()
+                            
+                            # Применяем выбранные признаки из session_state (если есть) для анализа
+                            if "selected_features" in st.session_state and st.session_state.selected_features:
+                                current_selected = [f for f in st.session_state.selected_features if f in df_features_full.columns]
+                                if current_selected:
+                                    cols_to_keep = ["image"] + current_selected
+                                    available_cols = [col for col in cols_to_keep if col in df_features_full.columns]
+                                    df_features = df_features_full[available_cols]
+                                else:
+                                    df_features = df_features_full.copy()
+                            else:
+                                # Используем старый метод если нет выбранных признаков
+                                df_features = aggregate.select_feature_columns(
+                                    df_features_full,
+                                    use_positive_loadings=use_positive_loadings,
+                                    min_loading=min_loading,
+                                    exclude_paneth=exclude_paneth
+                                )
+                        else:
+                            # Для абсолютных признаков используем только df
+                            df_features = df.copy()
+                            # Удаляем относительные признаки, если они случайно попали
+                            relative_cols = [col for col in df_features.columns if 'relative' in col.lower()]
+                            if relative_cols:
+                                df_features = df_features.drop(columns=relative_cols)
+                            # Удаляем White space, если он попал
+                            white_space_cols = [col for col in df_features.columns if 'white space' in col.lower()]
+                            if white_space_cols:
+                                df_features = df_features.drop(columns=white_space_cols)
+                            
+                            # Используем df для интерфейса выбора признаков
+                            df_features_for_selection = df_features.copy()
+                            
+                            # Применяем выбранные признаки из нового интерфейса
+                            if "selected_features" in st.session_state and st.session_state.selected_features:
+                                current_selected = [f for f in st.session_state.selected_features if f in df_features.columns]
+                                if current_selected:
+                                    cols_to_keep = ["image"] + current_selected
+                                    available_cols = [col for col in cols_to_keep if col in df_features.columns]
+                                    df_features = df_features[available_cols]
+                        
+                        # Сохраняем в session_state для дальнейшей работы
+                        st.session_state.df_results = df_features
+                        st.session_state.df = df
+                        st.session_state.df_features = df_features
+                        st.session_state.df_features_full = df_features_full if use_relative_features else None
+                        st.session_state.df_features_for_selection = df_features_for_selection
+                        st.session_state.df_all_features = df_all_features if 'df_all_features' in locals() else None
+                        st.session_state.settings = {
+                            "use_relative_features": use_relative_features,
+                            "use_spectral_analysis": use_spectral_analysis,
+                            "percentile_low": percentile_low,
+                            "percentile_high": percentile_high,
+                        }
+                        
+                        # Устанавливаем predictions в None, чтобы не загружать JSON
+                        predictions = None
+                    else:
+                        st.error("❌ Не удалось загрузить агрегированные данные из эксперимента")
+                        use_experiment_data = False
+                except Exception as e:
+                    st.error(f"❌ Ошибка при загрузке данных из эксперимента: {e}")
+                    use_experiment_data = False
+    
+    # Обработка данных с кэшированием (только если не используем данные из эксперимента)
+    # ИЛИ если используем данные из эксперимента, но они еще не обработаны
+    if (not use_experiment_data and predictions and len(predictions) > 0) or (use_experiment_data and "df" not in st.session_state):
         # Ключ кэша для агрегированных данных
         df_cache_key = f"df_aggregated_{hash(str(sorted(predictions.keys())))}"
         
@@ -432,8 +701,8 @@ def render_dashboard():
                 # Сохраняем в кэш
                 st.session_state[df_cache_key] = df
 
-        # Кэширование df_features_full
-        if use_relative_features:
+        # Кэширование df_features_full (только если не используем данные из эксперимента)
+        if not use_experiment_data and use_relative_features:
             # Ключ кэша для полного набора признаков
             df_features_full_cache_key = f"df_features_full_{df_cache_key}_{use_relative_features}"
             
@@ -490,13 +759,46 @@ def render_dashboard():
                     available_cols = [col for col in cols_to_keep if col in df_features.columns]
                     df_features = df_features[available_cols]
 
-        st.session_state.df_results = df_features
-        st.session_state.settings = {
-            "use_relative_features": use_relative_features,
-            "use_spectral_analysis": use_spectral_analysis,
-            "percentile_low": percentile_low,
-            "percentile_high": percentile_high,
-        }
+        # Сохраняем в session_state только если еще не сохранено (для данных из эксперимента уже сохранено)
+        if "df_results" not in st.session_state or not use_experiment_data:
+            st.session_state.df_results = df_features
+            st.session_state.df = df if 'df' in locals() else None
+            st.session_state.df_features = df_features if 'df_features' in locals() else None
+            st.session_state.df_features_full = df_features_full if use_relative_features and 'df_features_full' in locals() else None
+            st.session_state.df_features_for_selection = df_features_for_selection if 'df_features_for_selection' in locals() else (df_features_full.copy() if use_relative_features and 'df_features_full' in locals() else df_features.copy() if 'df_features' in locals() else None)
+            st.session_state.settings = {
+                "use_relative_features": use_relative_features,
+                "use_spectral_analysis": use_spectral_analysis,
+                "percentile_low": percentile_low,
+                "percentile_high": percentile_high,
+            }
+        
+        # Восстанавливаем переменные из session_state для использования во вкладках
+        df = st.session_state.get("df", df if 'df' in locals() else None)
+        df_features = st.session_state.get("df_features", df_features if 'df_features' in locals() else None)
+        df_features_full = st.session_state.get("df_features_full", df_features_full if 'df_features_full' in locals() else None)
+        df_features_for_selection = st.session_state.get("df_features_for_selection", df_features_for_selection if 'df_features_for_selection' in locals() else None)
+    
+    # Проверяем, есть ли данные для отображения вкладок
+    # Данные могут быть либо из predictions, либо из эксперимента
+    has_data = False
+    if use_experiment_data:
+        # Для данных из эксперимента проверяем session_state
+        has_data = ("df" in st.session_state and st.session_state.df is not None) or \
+                   ("df_features" in st.session_state and st.session_state.df_features is not None)
+    else:
+        # Для обычной загрузки проверяем predictions или session_state
+        has_data = (predictions is not None and len(predictions) > 0) or \
+                   ("df" in st.session_state and st.session_state.df is not None)
+    
+    # Создаем вкладки только если есть данные
+    if has_data:
+        # Восстанавливаем переменные из session_state для использования во вкладках (если еще не восстановлены)
+        if use_experiment_data or "df" in st.session_state:
+            df = st.session_state.get("df", None)
+            df_features = st.session_state.get("df_features", None)
+            df_features_full = st.session_state.get("df_features_full", None)
+            df_features_for_selection = st.session_state.get("df_features_for_selection", None)
 
         # Вкладки для визуализации
         # Упрощенная структура: кластеризация интегрирована в спектральный анализ
@@ -562,15 +864,26 @@ def render_dashboard():
 
         with tab_features:
             st.header("🎯 Выбор признаков для анализа")
-            st.markdown("Выберите признаки для построения шкалы патологии. Изменения применяются после нажатия кнопки 'Применить признаки'.")
+            st.markdown("Выберите признаки для построения шкалы патологии. PCA автоматически пересчитывается при загрузке данных. Кнопка 'Применить признаки' появится только при изменении признаков.")
             
             # Используем полный набор признаков для интерфейса выбора
-            if 'df_features_for_selection' in locals():
+            # Сначала проверяем session_state, потом локальные переменные
+            if "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                df_features_for_ui = st.session_state.df_features_for_selection
+            elif 'df_features_for_selection' in locals() and df_features_for_selection is not None:
                 df_features_for_ui = df_features_for_selection
-            else:
+            elif use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                df_features_for_ui = st.session_state.df_features_full
+            elif use_relative_features and 'df_features_full' in locals() and df_features_full is not None:
+                df_features_for_ui = df_features_full
+            elif "df_features" in st.session_state and st.session_state.df_features is not None:
+                df_features_for_ui = st.session_state.df_features
+            elif 'df_features' in locals() and df_features is not None:
                 df_features_for_ui = df_features
+            else:
+                df_features_for_ui = None
             
-            if len(df_features_for_ui) > 0:
+            if df_features_for_ui is not None and len(df_features_for_ui) > 0:
                 # Для абсолютных признаков Crypts остается в df_features (он является признаком)
                 # Crypts исключается только из относительных признаков, так как используется как нормализатор
                 
@@ -633,7 +946,7 @@ def render_dashboard():
                         return []
                     
                     try:
-                        from . import pca_scoring
+                        from scale import pca_scoring
                         df_all_features = aggregate.select_all_feature_columns(df_features_for_ui)
                         all_feature_cols = [c for c in df_all_features.columns if c != "image"]
                         
@@ -713,11 +1026,38 @@ def render_dashboard():
                 def save_feature_config(selected_features_list):
                     """Сохраняет выбранные признаки в конфигурационный файл."""
                     try:
+                        # Загружаем текущую конфигурацию для сохранения метаданных
+                        current_config = {}
+                        if config_file.exists():
+                            try:
+                                with open(config_file, 'r', encoding='utf-8') as f:
+                                    current_config = json.load(f)
+                            except Exception:
+                                pass
+                        
                         config = {
                             "selected_features": selected_features_list,
                             "description": f"Выбранные {'относительные' if use_relative_features else 'абсолютные'} признаки для построения шкалы патологии",
-                            "last_updated": datetime.now().isoformat()
+                            "last_updated": datetime.now().isoformat(),
+                            "n_features": len(selected_features_list),
                         }
+                        
+                        # Сохраняем информацию об исходном эксперименте (если есть)
+                        if current_config.get("source_experiment"):
+                            config["source_experiment"] = current_config["source_experiment"]
+                            config["description"] += f" (изменено пользователем, исходный эксперимент: {current_config['source_experiment']})"
+                        
+                        # Сохраняем метрики исходного эксперимента (если есть)
+                        if current_config.get("metrics"):
+                            config["original_metrics"] = current_config["metrics"]
+                        
+                        # Сохраняем метод исходного эксперимента (если есть)
+                        if current_config.get("method"):
+                            config["original_method"] = current_config["method"]
+                        
+                        # Добавляем флаг, что это пользовательские изменения
+                        config["user_modified"] = True
+                        
                         with open(config_file, 'w', encoding='utf-8') as f:
                             json.dump(config, f, indent=2, ensure_ascii=False)
                         return True
@@ -852,7 +1192,7 @@ def render_dashboard():
                 # ПРОСТОЙ ИНТЕРФЕЙС: Один список со всеми признаками
                 # ============================================
                 st.markdown("### 📋 Список всех признаков")
-                st.info("💡 Отметьте признаки для использования. Изменения применяются после нажатия кнопки 'Применить признаки'.")
+                st.info("💡 Отметьте признаки для использования. Кнопка 'Применить признаки' появится только при изменении признаков.")
                 
                 # Показываем количество выбранных
                 selected_count = len([f for f in st.session_state.selected_features if f in feature_cols])
@@ -981,8 +1321,18 @@ def render_dashboard():
                             for feat in sorted(unselected_features):
                                 st.text(f"  ☐ {feat}")
                     
-                    # Кнопка применения
-                    apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
+                    # Проверяем, были ли изменены признаки
+                    current_selected_from_dict = [f for f, selected in selected_features_dict.items() if selected]
+                    current_selected_from_state = st.session_state.get("selected_features", [])
+                    features_changed = set(current_selected_from_dict) != set(current_selected_from_state)
+                    
+                    # Кнопка применения - всегда показываем, но делаем неактивной если признаки не изменены
+                    if features_changed:
+                        apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
+                    else:
+                        # Если признаки не изменены, показываем неактивную кнопку и информационное сообщение
+                        st.info("💡 Признаки не изменены. PCA будет автоматически пересчитан при необходимости.")
+                        apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary", disabled=True)
                     
                     if apply_button:
                         # Применяем выбранные чекбоксы
@@ -1016,11 +1366,164 @@ def render_dashboard():
                         # Сохраняем в конфигурационный файл
                         if save_feature_config(selected_features_list):
                             st.success("✅ Конфигурация сохранена в файл")
+                            # Показываем информацию об исходном эксперименте (если есть)
+                            try:
+                                with open(config_file, 'r', encoding='utf-8') as f:
+                                    saved_config = json.load(f)
+                                if saved_config.get("source_experiment"):
+                                    st.info(f"💡 Исходный эксперимент: **{saved_config['source_experiment']}** (не изменен)")
+                            except Exception:
+                                pass
                         
                         st.rerun()
                 
                 # Показываем текущий статус
                 st.markdown("---")
+                
+                # Показываем информацию об источнике конфигурации
+                # Приоритет: если используется эксперимент, показываем его данные из session_state
+                # Иначе показываем данные из конфига
+                if use_experiment_data and "experiment_name" in st.session_state and "experiment_config_cache" in st.session_state:
+                    # Используем данные из текущего эксперимента
+                    current_exp_name = st.session_state.experiment_name
+                    experiment_config = st.session_state.experiment_config_cache
+                    
+                    st.success(f"📊 Конфигурация из эксперимента: **{current_exp_name}**")
+                    
+                    # Показываем метрики текущего эксперимента
+                    if experiment_config.get("metrics"):
+                        metrics = experiment_config.get("metrics", {})
+                        with st.expander("📈 Метрики исходного эксперимента"):
+                            score_val = metrics.get('score', 0)
+                            separation_val = metrics.get('separation', 0)
+                            mean_pc1_norm_mod_val = metrics.get('mean_pc1_norm_mod', 0)
+                            explained_variance_val = metrics.get('explained_variance', 0)
+                            
+                            # Score
+                            st.markdown("### Score (комплексная оценка)")
+                            st.metric("Score", f"{score_val:.4f}")
+                            st.info(
+                                "**Score** - комплексная оценка качества набора признаков:\n\n"
+                                "• 40% - разделение между группами (separation)\n"
+                                "• 30% - позиция mod образцов на нормализованной шкале (ближе к 1)\n"
+                                "• 30% - объясненная дисперсия PC1\n\n"
+                                "**Хорошие значения:** > 1.0"
+                            )
+                            
+                            st.markdown("---")
+                            
+                            # Separation
+                            st.markdown("### Separation (разделение групп)")
+                            st.metric("Separation", f"{separation_val:.4f}")
+                            st.info(
+                                "**Separation** - разница между средними значениями PC1 для патологических (mod) "
+                                "и нормальных (normal) образцов.\n\n"
+                                "• Чем больше значение, тем лучше разделение между группами\n"
+                                "• **Хорошие значения:** > 2.0\n"
+                                "• **Отличные значения:** > 4.0"
+                            )
+                            
+                            st.markdown("---")
+                            
+                            # Mod (норм. PC1)
+                            st.markdown("### Mod (норм. PC1)")
+                            st.metric("Mod (норм. PC1)", f"{mean_pc1_norm_mod_val:.4f}")
+                            st.info(
+                                "**Mod (норм. PC1)** - среднее нормализованное значение PC1 для патологических образцов.\n\n"
+                                "• Значение от 0 до 1 на нормализованной шкале\n"
+                                "• **Цель:** близко к 1.0 (патологические образцы должны иметь высокие значения PC1)\n"
+                                "• **Хорошие значения:** > 0.7\n"
+                                "• **Отличные значения:** > 0.85"
+                            )
+                            
+                            st.markdown("---")
+                            
+                            # Объясненная дисперсия
+                            st.markdown("### Объясненная дисперсия")
+                            st.metric("Объясненная дисперсия", f"{explained_variance_val:.4f}")
+                            st.info(
+                                "**Объясненная дисперсия** - доля дисперсии данных, объясняемая первой главной компонентой (PC1).\n\n"
+                                "• Показывает, насколько хорошо PC1 описывает вариативность данных\n"
+                                "• Значение от 0 до 1 (или от 0% до 100%)\n"
+                                "• **Хорошие значения:** > 0.3 (30%)\n"
+                                "• **Отличные значения:** > 0.5 (50%)"
+                            )
+                else:
+                    # Используем данные из конфига
+                    try:
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            current_config_info = json.load(f)
+                        
+                        if current_config_info.get("source_experiment"):
+                            source_exp = current_config_info["source_experiment"]
+                            user_modified = current_config_info.get("user_modified", False)
+                            
+                            if user_modified:
+                                st.info(f"📊 Конфигурация из эксперимента: **{source_exp}** (изменено пользователем)")
+                            else:
+                                st.success(f"📊 Конфигурация из эксперимента: **{source_exp}**")
+                            
+                            # Показываем метрики исходного эксперимента
+                            if current_config_info.get("original_metrics") or current_config_info.get("metrics"):
+                                metrics = current_config_info.get("original_metrics") or current_config_info.get("metrics", {})
+                                with st.expander("📈 Метрики исходного эксперимента"):
+                                    score_val = metrics.get('score', 0)
+                                    separation_val = metrics.get('separation', 0)
+                                    mean_pc1_norm_mod_val = metrics.get('mean_pc1_norm_mod', 0)
+                                    explained_variance_val = metrics.get('explained_variance', 0)
+                                    
+                                    # Score
+                                    st.markdown("### Score (комплексная оценка)")
+                                    st.metric("Score", f"{score_val:.4f}")
+                                    st.info(
+                                        "**Score** - комплексная оценка качества набора признаков:\n\n"
+                                        "• 40% - разделение между группами (separation)\n"
+                                        "• 30% - позиция mod образцов на нормализованной шкале (ближе к 1)\n"
+                                        "• 30% - объясненная дисперсия PC1\n\n"
+                                        "**Хорошие значения:** > 1.0"
+                                    )
+                                    
+                                    st.markdown("---")
+                                    
+                                    # Separation
+                                    st.markdown("### Separation (разделение групп)")
+                                    st.metric("Separation", f"{separation_val:.4f}")
+                                    st.info(
+                                        "**Separation** - разница между средними значениями PC1 для патологических (mod) "
+                                        "и нормальных (normal) образцов.\n\n"
+                                        "• Чем больше значение, тем лучше разделение между группами\n"
+                                        "• **Хорошие значения:** > 2.0\n"
+                                        "• **Отличные значения:** > 4.0"
+                                    )
+                                    
+                                    st.markdown("---")
+                                    
+                                    # Mod (норм. PC1)
+                                    st.markdown("### Mod (норм. PC1)")
+                                    st.metric("Mod (норм. PC1)", f"{mean_pc1_norm_mod_val:.4f}")
+                                    st.info(
+                                        "**Mod (норм. PC1)** - среднее нормализованное значение PC1 для патологических образцов.\n\n"
+                                        "• Значение от 0 до 1 на нормализованной шкале\n"
+                                        "• **Цель:** близко к 1.0 (патологические образцы должны иметь высокие значения PC1)\n"
+                                        "• **Хорошие значения:** > 0.7\n"
+                                        "• **Отличные значения:** > 0.85"
+                                    )
+                                    
+                                    st.markdown("---")
+                                    
+                                    # Объясненная дисперсия
+                                    st.markdown("### Объясненная дисперсия")
+                                    st.metric("Объясненная дисперсия", f"{explained_variance_val:.4f}")
+                                    st.info(
+                                        "**Объясненная дисперсия** - доля дисперсии данных, объясняемая первой главной компонентой (PC1).\n\n"
+                                        "• Показывает, насколько хорошо PC1 описывает вариативность данных\n"
+                                        "• Значение от 0 до 1 (или от 0% до 100%)\n"
+                                        "• **Хорошие значения:** > 0.3 (30%)\n"
+                                        "• **Отличные значения:** > 0.5 (50%)"
+                                    )
+                    except Exception:
+                        pass
+                
                 current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
                 if current_selected:
                     st.success(f"✅ Выбрано {len(current_selected)} признаков")
@@ -1036,6 +1539,105 @@ def render_dashboard():
                     cols_to_keep = ["image"] + current_selected
                     available_cols = [col for col in cols_to_keep if col in df_features.columns]
                     df_features = df_features[available_cols]
+                
+                # Вычисляем метрики для текущего набора признаков (если не используется эксперимент)
+                # Метрики вычисляются только для пользовательских данных, не для экспериментов
+                if not use_experiment_data and len(current_selected) > 0 and "image" in df_features.columns:
+                    # Определяем mod и normal образцы из имен файлов
+                    mod_samples = []
+                    normal_samples = []
+                    
+                    for img_name in df_features["image"].unique():
+                        sample_type = identify_sample_type(str(img_name))
+                        if sample_type == 'mod':
+                            mod_samples.append(img_name)
+                        elif sample_type == 'normal':
+                            normal_samples.append(img_name)
+                    
+                    # Вычисляем метрики только если есть и mod, и normal образцы
+                    if len(mod_samples) > 0 and len(normal_samples) > 0:
+                        try:
+                            feature_cols_for_metrics = [col for col in current_selected if col in df_features.columns]
+                            if len(feature_cols_for_metrics) > 0:
+                                current_metrics = evaluate_feature_set(
+                                    df_features,
+                                    feature_cols_for_metrics,
+                                    mod_samples,
+                                    normal_samples
+                                )
+                                
+                                # Проверяем, что метрики валидны (не -inf)
+                                if (current_metrics.get('score', -np.inf) != -np.inf and 
+                                    current_metrics.get('separation', -np.inf) != -np.inf):
+                                    
+                                    with st.expander("📊 Метрики качества текущего набора признаков", expanded=False):
+                                        score_val = current_metrics.get('score', 0)
+                                        separation_val = current_metrics.get('separation', 0)
+                                        mean_pc1_norm_mod_val = current_metrics.get('mean_pc1_norm_mod', 0)
+                                        explained_variance_val = current_metrics.get('explained_variance', 0)
+                                        
+                                        st.info(
+                                            f"**Статистика данных:**\n\n"
+                                            f"• Всего образцов: {len(df_features)}\n"
+                                            f"• Патологических (mod): {len(mod_samples)}\n"
+                                            f"• Нормальных (normal): {len(normal_samples)}\n"
+                                            f"• Выбрано признаков: {len(feature_cols_for_metrics)}"
+                                        )
+                                        
+                                        st.markdown("---")
+                                        
+                                        # Score
+                                        st.markdown("### Score (комплексная оценка)")
+                                        st.metric("Score", f"{score_val:.4f}")
+                                        st.info(
+                                            "**Score** - комплексная оценка качества набора признаков:\n\n"
+                                            "• 40% - разделение между группами (separation)\n"
+                                            "• 30% - позиция mod образцов на нормализованной шкале (ближе к 1)\n"
+                                            "• 30% - объясненная дисперсия PC1\n\n"
+                                            "**Хорошие значения:** > 1.0"
+                                        )
+                                        
+                                        st.markdown("---")
+                                        
+                                        # Separation
+                                        st.markdown("### Separation (разделение групп)")
+                                        st.metric("Separation", f"{separation_val:.4f}")
+                                        st.info(
+                                            "**Separation** - разница между средними значениями PC1 для патологических (mod) "
+                                            "и нормальных (normal) образцов.\n\n"
+                                            "• Чем больше значение, тем лучше разделение между группами\n"
+                                            "• **Хорошие значения:** > 2.0\n"
+                                            "• **Отличные значения:** > 4.0"
+                                        )
+                                        
+                                        st.markdown("---")
+                                        
+                                        # Mod (норм. PC1)
+                                        st.markdown("### Mod (норм. PC1)")
+                                        st.metric("Mod (норм. PC1)", f"{mean_pc1_norm_mod_val:.4f}")
+                                        st.info(
+                                            "**Mod (норм. PC1)** - среднее нормализованное значение PC1 для патологических образцов.\n\n"
+                                            "• Значение от 0 до 1 на нормализованной шкале\n"
+                                            "• **Цель:** близко к 1.0 (патологические образцы должны иметь высокие значения PC1)\n"
+                                            "• **Хорошие значения:** > 0.7\n"
+                                            "• **Отличные значения:** > 0.85"
+                                        )
+                                        
+                                        st.markdown("---")
+                                        
+                                        # Объясненная дисперсия
+                                        st.markdown("### Объясненная дисперсия")
+                                        st.metric("Объясненная дисперсия", f"{explained_variance_val:.4f}")
+                                        st.info(
+                                            "**Объясненная дисперсия** - доля дисперсии данных, объясняемая первой главной компонентой (PC1).\n\n"
+                                            "• Показывает, насколько хорошо PC1 описывает вариативность данных\n"
+                                            "• Значение от 0 до 1 (или от 0% до 100%)\n"
+                                            "• **Хорошие значения:** > 0.3 (30%)\n"
+                                            "• **Отличные значения:** > 0.5 (50%)"
+                                        )
+                        except Exception as e:
+                            # Не показываем ошибку, просто не отображаем метрики
+                            pass
                 
                 # Рекомендации
                 with st.expander("💡 Рекомендации по выбору признаков"):
@@ -1064,7 +1666,7 @@ def render_dashboard():
                        - Нажмите кнопку "Только патология" для быстрого выбора
                        - Или выберите вручную: Dysplasia, Mild, Moderate признаки
                     
-                    **После изменения признаков** нажмите кнопку "Применить признаки" для применения изменений и автоматического пересчета PCA.
+                    **После изменения признаков** кнопка "Применить признаки" появится автоматически. PCA пересчитывается при загрузке данных и после применения изменений.
                     """)
             else:
                 st.info("Загрузите данные, чтобы выбрать признаки")
@@ -1254,16 +1856,122 @@ def render_dashboard():
                     ("features_applied" in st.session_state and st.session_state.features_applied)  # Признаки были изменены
                 )
                 
-                if need_retrain:
+                # Если загружаем данные из эксперимента, пытаемся загрузить сохраненную модель
+                analyzer_loaded_from_experiment = False
+                if use_experiment_data and "experiment_dir" in st.session_state and need_retrain:
+                    experiment_dir = Path(st.session_state.experiment_dir)
+                    model_path = experiment_dir / "spectral_analyzer.pkl"
+                    if model_path.exists():
+                        try:
+                            analyzer = spectral_analysis.SpectralAnalyzer()
+                            analyzer.load(model_path)
+                            # Проверяем, что модель совместима с текущими данными
+                            if analyzer.feature_columns is not None:
+                                # Проверяем, что все признаки модели есть в текущих данных
+                                missing_features = [f for f in analyzer.feature_columns if f not in df_features.columns]
+                                if not missing_features:
+                                    analyzer_loaded_from_experiment = True
+                                    st.info(f"✅ Загружена модель PCA из эксперимента (использовано {len(analyzer.feature_columns)} признаков)")
+                                else:
+                                    st.warning(f"⚠️ Модель из эксперимента использует признаки, которых нет в данных: {missing_features}")
+                        except Exception as e:
+                            st.warning(f"⚠️ Не удалось загрузить модель из эксперимента: {e}")
+                
+                if analyzer_loaded_from_experiment:
+                    # Модель загружена из эксперимента, нужно вычислить df_pca и fit_spectrum
+                    # Используем полный набор данных, чтобы все признаки из модели были доступны
+                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                        df_for_transform = st.session_state.df_features_full
+                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                        df_for_transform = st.session_state.df_features_for_selection
+                    else:
+                        df_for_transform = df_features
+                    df_pca = analyzer.transform_pca(df_for_transform)
+                    analyzer.fit_spectrum(
+                        df_pca,
+                        percentile_low=percentile_low,
+                        percentile_high=percentile_high,
+                    )
+                    # Сохраняем в session_state
+                    st.session_state.analyzer = analyzer
+                    st.session_state.df_pca = df_pca
+                    st.session_state.spectral_settings_key = spectral_settings_key
+                    # Очищаем кэш GMM качества, так как PCA изменился
+                    cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
+                    for key in cache_keys_to_remove:
+                        del st.session_state[key]
+                    # Очищаем сохраненный спектр
+                    if "df_spectrum" in st.session_state:
+                        del st.session_state["df_spectrum"]
+                
+                if need_retrain and not analyzer_loaded_from_experiment:
                     # Обучение спектрального анализатора
                     with st.spinner("Обучение спектрального анализатора..."):
                         analyzer = spectral_analysis.SpectralAnalyzer()
 
-                        # PCA
-                        analyzer.fit_pca(df_features)
+                        # Если загружаем данные из эксперимента, используем признаки из конфигурации эксперимента
+                        if use_experiment_data and "experiment_config_cache" in st.session_state:
+                            experiment_config = st.session_state.experiment_config_cache
+                            experiment_features = experiment_config.get('features', [])
+                            if experiment_features:
+                                # Используем ТОЧНО те же признаки, что были в эксперименте
+                                # Проверяем против полного набора признаков (df_features_full или df_features_for_selection),
+                                # а не против уже отфильтрованного df_features
+                                if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                                    check_against_df = st.session_state.df_features_full
+                                elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                                    check_against_df = st.session_state.df_features_for_selection
+                                else:
+                                    check_against_df = df_features
+                                
+                                available_experiment_features = [
+                                    f for f in experiment_features 
+                                    if f in check_against_df.columns
+                                ]
+                                if available_experiment_features:
+                                    feature_columns_for_pca = available_experiment_features
+                                    st.info(f"💡 Используются признаки из эксперимента: {len(feature_columns_for_pca)} признаков")
+                                    # Показываем, какие признаки используются (включая структурные, если есть)
+                                    structural_in_pca = [f for f in feature_columns_for_pca if any(x in f.lower() for x in ['surface epithelium', 'muscularis mucosae'])]
+                                    if structural_in_pca:
+                                        st.info(f"   Включая структурные признаки: {', '.join(structural_in_pca)}")
+                                else:
+                                    # Fallback: используем все числовые колонки
+                                    feature_columns_for_pca = [
+                                        col for col in df_features.select_dtypes(include=[np.number]).columns
+                                        if col != "image"
+                                    ]
+                                    st.warning("⚠️ Признаки из эксперимента не найдены в данных, используются все доступные")
+                            else:
+                                # Fallback: используем все числовые колонки
+                                feature_columns_for_pca = [
+                                    col for col in df_features.select_dtypes(include=[np.number]).columns
+                                    if col != "image"
+                                ]
+                        else:
+                            # Обычный режим: используем все числовые колонки из df_features (включая структурные, если они выбраны)
+                            feature_columns_for_pca = [
+                                col for col in df_features.select_dtypes(include=[np.number]).columns
+                                if col != "image"
+                            ]
+                        
+                        # Для обучения PCA используем полный набор данных, если загружаем эксперимент
+                        # Это гарантирует, что все признаки из эксперимента будут доступны
+                        if use_experiment_data and "experiment_config_cache" in st.session_state:
+                            if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                                df_for_pca = st.session_state.df_features_full
+                            elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                                df_for_pca = st.session_state.df_features_for_selection
+                            else:
+                                df_for_pca = df_features
+                        else:
+                            df_for_pca = df_features
+                        
+                        analyzer.fit_pca(df_for_pca, feature_columns=feature_columns_for_pca)
 
-                        # Преобразование через PCA
-                        df_pca = analyzer.transform_pca(df_features)
+                        # Преобразование через PCA - используем тот же DataFrame, что и при обучении
+                        # чтобы все признаки были доступны
+                        df_pca = analyzer.transform_pca(df_for_pca)
 
                         # Анализ спектра
                         analyzer.fit_spectrum(
@@ -1398,7 +2106,7 @@ def render_dashboard():
                             st.warning(f"Не удалось оценить качество: {e}")
                 
                 # GMM (опционально) - выполняется независимо от переобучения
-                use_gmm = st.checkbox("Использовать GMM для моделирования состояний")
+                use_gmm = st.checkbox("Использовать GMM для моделирования состояний", value=True)
                 if use_gmm:
                     # Определяем оптимальное число компонентов по BIC (если доступно)
                     default_n_components = optimal_components if not quality_df.empty else 2
@@ -2147,6 +2855,14 @@ def render_dashboard():
                     """)
                 
                 feature_importance = analyzer.get_feature_importance()
+                
+                # Показываем информацию о признаках, используемых в PCA
+                if analyzer.feature_columns is not None:
+                    structural_features_in_pca = [f for f in analyzer.feature_columns if any(x in f.lower() for x in ['surface epithelium', 'muscularis mucosae'])]
+                    if structural_features_in_pca:
+                        st.info(f"📊 **Используется {len(analyzer.feature_columns)} признаков в PCA**, включая структурные: {', '.join(structural_features_in_pca)}")
+                    else:
+                        st.info(f"📊 **Используется {len(analyzer.feature_columns)} признаков в PCA**")
 
                 # Таблица с важностью признаков (показываем все)
                 # Создание DataFrame для таблицы
@@ -2155,6 +2871,11 @@ def render_dashboard():
                     "Loading (важность)": feature_importance.values,
                     "Абсолютное значение": feature_importance.abs().values
                 }).sort_values("Абсолютное значение", ascending=False)
+                
+                # Проверяем, есть ли структурные признаки в таблице
+                structural_in_table = [f for f in importance_df["Признак"].values if any(x in f.lower() for x in ['surface epithelium', 'muscularis mucosae'])]
+                if structural_in_table:
+                    st.info(f"💡 **Структурные признаки в PCA:** {', '.join(structural_in_table)}. Их loadings могут быть малыми, что означает небольшой вклад в PC1, но они все равно учитываются при вычислении.")
                 
                 st.dataframe(importance_df, use_container_width=True, hide_index=True)
 
@@ -2496,20 +3217,26 @@ def render_dashboard():
                 
                 # ============================================
                 # Секция кластеризации как дополнение к спектральному анализу
+                # ВРЕМЕННО ОТКЛЮЧЕНА - кластеризация пока не помогает
                 # ============================================
-                st.markdown("---")
-                st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
-                st.markdown("""
-                **Кластеризация дополняет спектральный анализ**, выявляя структуру данных и позволяя проецировать 
-                кластеры на единую спектральную шкалу через метод `spectrum_projection`.
+                # st.markdown("---")
+                # st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
+                enable_clustering = False  # Временно отключено
                 
-                **Порядок работы:**
-                1. ✅ Спектральный анализ уже выполнен выше
-                2. Выполните кластеризацию ниже
-                3. Примените маппинг кластеров на спектральную шкалу
-                """)
+                if enable_clustering:
+                    st.markdown("---")
+                    st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
+                    st.markdown("""
+                    **Кластеризация дополняет спектральный анализ**, выявляя структуру данных и позволяя проецировать 
+                    кластеры на единую спектральную шкалу через метод `spectrum_projection`.
+                    
+                    **Порядок работы:**
+                    1. ✅ Спектральный анализ уже выполнен выше
+                    2. Выполните кластеризацию ниже
+                    3. Примените маппинг кластеров на спектральную шкалу
+                    """)
                 
-                if len(df_features) > 0:
+                if enable_clustering and len(df_features) > 0:
                     # Информация о спектральном анализе и рекомендации
                     has_spectral_analyzer = "analyzer" in st.session_state
                     gmm_n_components = None
@@ -2677,12 +3404,27 @@ def render_dashboard():
                                     "min_cluster_size": min_cluster_size if clustering_method == "hdbscan" else 2,
                                 }
                                 
+                                # Определяем, какой DataFrame использовать для кластеризации
+                                # Если используется внешний scaler из спектрального анализа, нужен полный набор данных
                                 if has_spectral_analyzer and use_pca_clustering:
                                     fit_kwargs["external_pca"] = analyzer.pca
                                     fit_kwargs["external_scaler"] = analyzer.scaler
+                                    # Передаем те же признаки, что использовались при обучении PCA
+                                    if analyzer.feature_columns is not None:
+                                        fit_kwargs["feature_columns"] = analyzer.feature_columns
                                     st.info(f"✅ Используется PCA из спектрального анализа ({spectral_pca_n_components} компонент, используется {pca_components_clustering})")
+                                    
+                                    # Используем полный набор данных, чтобы все признаки из PCA были доступны
+                                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                                        df_for_clustering = st.session_state.df_features_full
+                                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                                        df_for_clustering = st.session_state.df_features_for_selection
+                                    else:
+                                        df_for_clustering = df_features
+                                else:
+                                    df_for_clustering = df_features
                                 
-                                clusterer.fit(df_features, **fit_kwargs)
+                                clusterer.fit(df_for_clustering, **fit_kwargs)
                                 
                                 # Сохраняем в session state
                                 st.session_state.clusterer = clusterer
@@ -2700,7 +3442,14 @@ def render_dashboard():
                         
                         # Метрики
                         st.markdown("#### 📊 Метрики качества кластеризации")
-                        metrics = clusterer.get_metrics(df_features)
+                        # Используем тот же DataFrame, что и при обучении кластеризации
+                        if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                            df_for_metrics = st.session_state.df_features_full
+                        elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                            df_for_metrics = st.session_state.df_features_for_selection
+                        else:
+                            df_for_metrics = df_features
+                        metrics = clusterer.get_metrics(df_for_metrics)
                         
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
@@ -2808,7 +3557,17 @@ def render_dashboard():
                             key="scoring_method_spectral"
                         )
                         
-                        if st.button("🎯 Применить маппинг на score", type="primary", key="apply_scoring_spectral"):
+                        # Проверяем, есть ли кластеры перед маппингом
+                        has_clusters = False
+                        if "clusterer" in st.session_state:
+                            clusterer_check = st.session_state.clusterer
+                            if clusterer_check.labels_ is not None:
+                                n_clusters_found = len(set(clusterer_check.labels_)) - (1 if -1 in clusterer_check.labels_ else 0)
+                                has_clusters = n_clusters_found > 0
+                                if not has_clusters:
+                                    st.warning("⚠️ Кластеризация не нашла кластеры (все образцы - шум). Маппинг невозможен. Попробуйте изменить параметры кластеризации.")
+                        
+                        if st.button("🎯 Применить маппинг на score", type="primary", key="apply_scoring_spectral", disabled=not has_clusters):
                             with st.spinner("Выполняется маппинг кластеров на score..."):
                                 try:
                                     scorer = cluster_scoring.ClusterScorer(
@@ -2824,8 +3583,16 @@ def render_dashboard():
                                         kwargs["spectral_analyzer"] = analyzer
                                         kwargs["use_cluster_distribution"] = True
                                     
+                                    # Используем тот же DataFrame, что и при обучении кластеризации
+                                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                                        df_for_scoring = st.session_state.df_features_full
+                                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                                        df_for_scoring = st.session_state.df_features_for_selection
+                                    else:
+                                        df_for_scoring = df_features
+                                    
                                     df_with_scores = scorer.fit_transform(
-                                        df_features,
+                                        df_for_scoring,
                                         clusterer=clusterer,
                                         **kwargs
                                     )
@@ -2930,7 +3697,14 @@ def render_dashboard():
                                     st.code(traceback.format_exc())
                         else:
                             # Показываем базовую информацию о кластерах без маппинга
-                            df_with_clusters = clusterer.transform(df_features)
+                            # Используем тот же DataFrame, что и при обучении кластеризации
+                            if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
+                                df_for_transform = st.session_state.df_features_full
+                            elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
+                                df_for_transform = st.session_state.df_features_for_selection
+                            else:
+                                df_for_transform = df_features
+                            df_with_clusters = clusterer.transform(df_for_transform)
                             cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
                             st.markdown("**Распределение по кластерам:**")
                             st.dataframe(
@@ -3709,7 +4483,11 @@ def render_dashboard():
                 st.info("Загрузите данные для сравнения методов")
 
     else:
-        st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")
+        # Нет данных для отображения
+        if use_experiment_data:
+            st.warning("⚠️ Данные из эксперимента не загружены. Выберите эксперимент в боковой панели.")
+        else:
+            st.info("👈 Загрузите JSON файлы с предсказаниями в боковой панели")
 
 
 if __name__ == "__main__":

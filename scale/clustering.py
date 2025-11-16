@@ -120,16 +120,24 @@ class ClusterAnalyzer:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if "image" in numeric_cols:
                 numeric_cols.remove("image")
-            # Исключаем структурные элементы, используемые только для разбора по слоям
-            feature_columns = [
-                col for col in numeric_cols 
-                if not any(x in col.lower() for x in ['surface epithelium', 'muscularis mucosae'])
-            ]
+            # Используем все числовые колонки (включая структурные, если они есть)
+            # Структурные признаки исключаются только если явно не переданы в feature_columns
+            feature_columns = numeric_cols
         
         self.feature_columns = feature_columns
         
+        # Создаем копию DataFrame для работы
+        df_work = df.copy()
+        
+        # Проверяем, что все необходимые признаки присутствуют
+        missing_features = [f for f in feature_columns if f not in df_work.columns]
+        if missing_features:
+            # Заполняем отсутствующие признаки нулями
+            for feature in missing_features:
+                df_work[feature] = 0
+        
         # Извлечение данных
-        X = df[feature_columns].fillna(0).values
+        X = df_work[feature_columns].fillna(0).values
         
         # Нормализация
         if external_scaler is not None:
@@ -270,8 +278,18 @@ class ClusterAnalyzer:
         if self.feature_columns is None:
             raise ValueError("feature_columns не определены")
         
+        # Создаем копию DataFrame для работы
+        df_work = df.copy()
+        
+        # Проверяем, что все необходимые признаки присутствуют
+        missing_features = [f for f in self.feature_columns if f not in df_work.columns]
+        if missing_features:
+            # Заполняем отсутствующие признаки нулями
+            for feature in missing_features:
+                df_work[feature] = 0
+        
         # Извлечение данных
-        X = df[self.feature_columns].fillna(0).values
+        X = df_work[self.feature_columns].fillna(0).values
         
         # Нормализация
         X_scaled = self.scaler.transform(X)
@@ -534,8 +552,18 @@ class ClusterAnalyzer:
         if self.labels_ is None:
             raise ValueError("Кластеризатор не обучен. Вызовите fit() сначала.")
         
+        # Создаем копию DataFrame для работы
+        df_work = df.copy()
+        
+        # Проверяем, что все необходимые признаки присутствуют
+        missing_features = [f for f in self.feature_columns if f not in df_work.columns]
+        if missing_features:
+            # Заполняем отсутствующие признаки нулями
+            for feature in missing_features:
+                df_work[feature] = 0
+        
         # Извлечение данных
-        X = df[self.feature_columns].fillna(0).values
+        X = df_work[self.feature_columns].fillna(0).values
         X_scaled = self.scaler.transform(X)
         
         # PCA (если использовался)
