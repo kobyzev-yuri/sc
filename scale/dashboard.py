@@ -86,17 +86,32 @@ def save_experiment(
     df: pd.DataFrame,
     analyzer: Optional[spectral_analysis.SpectralAnalyzer] = None,
     metadata: Optional[dict] = None,
+    selected_features: Optional[List[str]] = None,
+    metrics: Optional[dict] = None,
+    use_relative_features: bool = True,
 ) -> None:
     """
-    Сохраняет результаты эксперимента.
+    Сохраняет результаты эксперимента в формате, совместимом с experiments.
+
+    Формат experiments включает:
+    - results.csv - DataFrame с результатами спектрального анализа
+    - spectral_analyzer.pkl - обученная модель (если предоставлена)
+    - metadata.json - метаданные эксперимента
+    - best_features_*.json - конфигурация признаков (если есть выбранные признаки)
 
     Args:
         exp_dir: Директория эксперимента
         df: DataFrame с результатами
         analyzer: Обученный SpectralAnalyzer (опционально)
         metadata: Дополнительные метаданные (опционально)
+        selected_features: Список выбранных признаков (опционально)
+        metrics: Словарь с метриками качества (опционально)
+        use_relative_features: Использовать относительные признаки
     """
     exp_dir = Path(exp_dir)
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Сохранение DataFrame
     csv_path = exp_dir / "results.csv"
@@ -107,12 +122,46 @@ def save_experiment(
         model_path = exp_dir / "spectral_analyzer.pkl"
         analyzer.save(model_path)
 
+    # Сохранение конфигурации признаков в формате best_features_*.json (если есть выбранные признаки)
+    if selected_features:
+        json_path = exp_dir / f"best_features_{timestamp}.json"
+        
+        # Подготавливаем метрики
+        if metrics is None:
+            metrics = {}
+        
+        config = {
+            'method': metadata.get('method', 'dashboard_manual') if metadata else 'dashboard_manual',
+            'selected_features': selected_features,
+            'metrics': {
+                'score': float(metrics.get('score', 0)),
+                'separation': float(metrics.get('separation', 0)),
+                'mean_pc1_norm_mod': float(metrics.get('mean_pc1_norm_mod', 0)),
+                'explained_variance': float(metrics.get('explained_variance', 0)),
+                'mean_pc1_mod': float(metrics.get('mean_pc1_mod', 0)),
+                'mean_pc1_normal': float(metrics.get('mean_pc1_normal', 0)),
+            },
+            'timestamp': timestamp,
+            'use_relative_features': use_relative_features,
+        }
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
     # Сохранение метаданных
     if metadata is None:
         metadata = {}
 
     metadata["timestamp"] = datetime.now().isoformat()
     metadata["n_samples"] = len(df)
+    
+    if selected_features:
+        metadata["n_features"] = len(selected_features)
+        metadata["selected_features"] = selected_features
+        metadata["use_relative_features"] = use_relative_features
+    
+    if metrics:
+        metadata["metrics"] = metrics
 
     metadata_path = exp_dir / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -479,15 +528,46 @@ def render_dashboard():
         st.markdown("---")
 
         st.header("💾 Эксперименты")
+        st.caption("Сохраняет результаты в формате experiments, совместимом с загрузкой через 'Использовать данные из эксперимента'")
 
         if st.button("Сохранить эксперимент"):
+            # Определяем, какие данные сохранять
+            df_to_save = None
             if "df_results" in st.session_state:
+                df_to_save = st.session_state.df_results
+            elif "df_spectrum" in st.session_state:
+                df_to_save = st.session_state.df_spectrum
+            
+            if df_to_save is not None:
                 exp_dir = create_experiment_dir()
+                
+                # Получаем выбранные признаки и метрики
+                selected_features = st.session_state.get("selected_features")
+                current_metrics = st.session_state.get("current_metrics")
+                settings = st.session_state.get("settings", {})
+                use_relative_features = settings.get("use_relative_features", True)
+                
+                # Подготавливаем метаданные
+                metadata = {"settings": settings}
+                
+                # Если есть информация об исходном эксперименте, сохраняем её
+                if use_experiment_data and "experiment_name" in st.session_state:
+                    metadata["source_experiment"] = st.session_state.experiment_name
+                    metadata["method"] = "experiment_loaded"
+                elif selected_features:
+                    metadata["method"] = "dashboard_manual"
+                    metadata["user_modified"] = True
+                    if use_experiment_data and "experiment_name" in st.session_state:
+                        metadata["source_experiment"] = st.session_state.experiment_name
+                
                 save_experiment(
                     exp_dir,
-                    st.session_state.df_results,
+                    df_to_save,
                     st.session_state.get("analyzer"),
-                    {"settings": st.session_state.get("settings", {})},
+                    metadata,
+                    selected_features=selected_features,
+                    metrics=current_metrics,
+                    use_relative_features=use_relative_features,
                 )
                 
                 # Сохранение результатов сравнения, если они есть
@@ -499,9 +579,15 @@ def render_dashboard():
                     except Exception as e:
                         st.warning(f"Не удалось сохранить результаты сравнения: {e}")
                 
-                st.success(f"Эксперимент сохранен: {exp_dir}")
+                st.success(f"✅ Эксперимент сохранен: {exp_dir}")
+                st.info(f"💡 Эксперимент сохранен в формате, совместимом с загрузкой через 'Использовать данные из эксперимента'")
+                
+                if selected_features:
+                    st.caption(f"📊 Сохранено {len(selected_features)} признаков")
+                if current_metrics:
+                    st.caption(f"📈 Метрики: Score={current_metrics.get('score', 0):.4f}, Separation={current_metrics.get('separation', 0):.4f}")
             else:
-                st.warning("Нет данных для сохранения")
+                st.warning("⚠️ Нет данных для сохранения. Выполните анализ данных перед сохранением.")
 
     # Основная область
     predictions = None
@@ -1626,6 +1712,9 @@ def render_dashboard():
                                 # Проверяем, что метрики валидны (не -inf)
                                 if (current_metrics.get('score', -np.inf) != -np.inf and 
                                     current_metrics.get('separation', -np.inf) != -np.inf):
+                                    
+                                    # Сохраняем метрики в session_state для использования при сохранении эксперимента
+                                    st.session_state.current_metrics = current_metrics
                                     
                                     with st.expander("📊 Метрики качества текущего набора признаков", expanded=False):
                                         score_val = current_metrics.get('score', 0)
