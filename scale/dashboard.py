@@ -34,7 +34,7 @@ except ImportError as e:
         f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
     ) from e
 
-from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, clustering, preprocessing, eda, cluster_comparison, cluster_scoring, method_comparison
+from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, preprocessing, eda
 from scale.feature_selection_automated import evaluate_feature_set, identify_sample_type
 
 
@@ -251,8 +251,7 @@ def render_dashboard():
                         keys_to_remove = [
                             "df", "df_features", "df_features_full", "df_features_for_selection",
                             "df_all_features", "df_results", "selected_features",
-                            "analyzer", "df_spectrum", "clusterer", "cluster_scorer",
-                            "df_with_cluster_scores", "comparison"
+                            "analyzer", "df_spectrum", "comparison"
                         ]
                         for key in keys_to_remove:
                             if key in st.session_state:
@@ -292,11 +291,71 @@ def render_dashboard():
 
         uploaded_files = None
         if not use_default_data and not use_experiment_data:
+            # Выбор директории для загрузки файлов
+            st.subheader("📁 Выбор директории для загрузки")
+            
+            # Предустановленные директории
+            default_upload_dirs = [
+                "results/predictions",
+                "test/predictions",
+                "scale_results/predictions",
+            ]
+            
+            # Выбор из предустановленных или ввод своего пути
+            upload_dir_option = st.radio(
+                "Выберите директорию для загрузки:",
+                ["Предустановленная", "Своя директория"],
+                index=0,
+                key="upload_dir_option"
+            )
+            
+            if upload_dir_option == "Предустановленная":
+                selected_upload_dir = st.selectbox(
+                    "Выберите директорию:",
+                    default_upload_dirs,
+                    index=0,
+                    key="selected_upload_dir"
+                )
+                upload_dir = Path(selected_upload_dir)
+            else:
+                custom_upload_dir = st.text_input(
+                    "Введите путь к директории:",
+                    value="results/predictions",
+                    placeholder="например: test/predictions",
+                    key="custom_upload_dir"
+                )
+                upload_dir = Path(custom_upload_dir)
+            
+            # Создаем директорию, если её нет
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            
+            st.info(f"📁 **Директория для загрузки:** `{upload_dir}`")
+            st.caption("Загруженные файлы будут сохранены в эту директорию")
+            
             uploaded_files = st.file_uploader(
-                "Загрузите JSON файлы с предсказаниями",
+                f"Загрузите JSON файлы с предсказаниями (будут сохранены в {upload_dir})",
                 type=["json"],
                 accept_multiple_files=True,
             )
+            
+            # Сохраняем загруженные файлы в директорию
+            if uploaded_files:
+                saved_count = 0
+                for uploaded_file in uploaded_files:
+                    try:
+                        file_path = upload_dir / uploaded_file.name
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        saved_count += 1
+                    except Exception as e:
+                        st.error(f"Ошибка при сохранении {uploaded_file.name}: {e}")
+                
+                if saved_count > 0:
+                    st.success(f"✅ Сохранено {saved_count} файлов в {upload_dir}")
+                    # Обновляем выбранную директорию на директорию загрузки
+                    st.session_state.predictions_dir = str(upload_dir)
+                    st.session_state.use_directory = True
+                    st.rerun()
 
         st.markdown("---")
 
@@ -337,7 +396,7 @@ def render_dashboard():
             **Рекомендация:**
             - Начать с относительных признаков (по умолчанию)
             - Попробовать абсолютные, если относительные не дают хорошего разделения
-            - Можно сравнить оба подхода через "Сравнение методов"
+            - Можно сравнить оба подхода экспериментально
             
             📖 Подробнее см. [docs/FEATURES.md](docs/FEATURES.md)
             """)
@@ -365,55 +424,57 @@ def render_dashboard():
         )
 
         st.markdown("---")
-        st.header("🔬 Сравнение методов")
+
+        st.header("🔮 Инференс")
         
-        enable_comparison = st.checkbox(
-            "Включить сравнение методов", value=False
+        # Выбор директории для инференса
+        inference_default_dirs = [
+            "results/inference",
+            "results/predictions",
+            "test/predictions",
+        ]
+        
+        # Поиск существующих директорий
+        inference_existing_dirs = []
+        for dir_path in inference_default_dirs:
+            p = Path(dir_path)
+            if p.exists() and list(p.glob("*.json")):
+                json_count = len(list(p.glob("*.json")))
+                inference_existing_dirs.append(f"{dir_path} ({json_count} файлов)")
+        
+        if inference_existing_dirs:
+            selected_inference_dir_label = st.selectbox(
+                "Директория для инференса",
+                inference_existing_dirs,
+                index=0,
+                help="Выберите директорию с JSON файлами для инференса"
+            )
+            inference_dir_str = selected_inference_dir_label.split(" (")[0]
+        else:
+            inference_dir_str = inference_default_dirs[0]
+        
+        # Возможность ввести свой путь
+        custom_inference_dir = st.text_input(
+            "Или введите свой путь",
+            value="",
+            placeholder="например: my_data/inference",
+            key="custom_inference_dir"
         )
         
-        # Инициализация переменных для сравнения
-        use_pca_simple = False
-        use_spectral_p1_p99 = False
-        use_spectral_p05_p995 = False
-        use_spectral_p5_p95 = False
-        use_spectral_gmm = False
-        use_custom_spectral = False
-        custom_percentile_low = 2.0
-        custom_percentile_high = 98.0
+        if custom_inference_dir:
+            inference_dir_str = custom_inference_dir
         
-        if enable_comparison:
-            st.subheader("Выберите методы для сравнения:")
-            
-            use_pca_simple = st.checkbox("PCA Scoring (простая нормализация)", value=True)
-            
-            use_spectral_p1_p99 = st.checkbox(
-                "Spectral Analysis [1, 99]", value=True
-            )
-            
-            use_spectral_p05_p995 = st.checkbox(
-                "Spectral Analysis [0.5, 99.5]", value=False
-            )
-            
-            use_spectral_p5_p95 = st.checkbox(
-                "Spectral Analysis [5, 95]", value=False
-            )
-            
-            use_spectral_gmm = st.checkbox(
-                "Spectral Analysis + GMM", value=False
-            )
-            
-            # Настройки для кастомного spectral analysis
-            st.subheader("Кастомный Spectral Analysis:")
-            custom_percentile_low = st.slider(
-                "Нижний процентиль (кастомный)", 0.0, 10.0, 2.0, 0.1, key="custom_low"
-            )
-            custom_percentile_high = st.slider(
-                "Верхний процентиль (кастомный)", 90.0, 100.0, 98.0, 0.1, key="custom_high"
-            )
-            use_custom_spectral = st.checkbox(
-                f"Spectral Analysis [{custom_percentile_low}, {custom_percentile_high}]", 
-                value=False
-            )
+        st.session_state.inference_dir = inference_dir_str
+        inference_dir = Path(inference_dir_str)
+        
+        if inference_dir.exists():
+            json_files = list(inference_dir.glob("*.json"))
+            if json_files:
+                st.success(f"✓ Найдено {len(json_files)} файлов для инференса")
+            else:
+                st.warning(f"⚠ В директории {inference_dir} нет JSON файлов")
+        else:
+            st.info(f"💡 Директория {inference_dir} будет создана при необходимости")
 
         st.markdown("---")
 
@@ -526,8 +587,7 @@ def render_dashboard():
             keys_to_remove = [
                 "df", "df_features", "df_features_full", "df_features_for_selection",
                 "df_all_features", "df_results", "selected_features",
-                "analyzer", "df_spectrum", "clusterer", "cluster_scorer",
-                "df_with_cluster_scores", "comparison", "experiment_config_cache"
+                "analyzer", "df_spectrum", "comparison", "experiment_config_cache"
             ]
             for key in keys_to_remove:
                 if key in st.session_state:
@@ -801,14 +861,18 @@ def render_dashboard():
             df_features_for_selection = st.session_state.get("df_features_for_selection", None)
 
         # Вкладки для визуализации
-        # Упрощенная структура: кластеризация интегрирована в спектральный анализ
-        tab_names = ["🎯 Выбор признаков", "📊 Данные", "📈 Распределения", "🔬 Спектральный анализ", "🔍 Анализ образцов", "📋 Статистика", "🔬 Сравнение методов построения шкалы"]
-        if enable_comparison:
-            tab_names.append("⚖️ Сравнение методов")
+        tab_names = [
+            "🎯 Выбор признаков",
+            "📊 Данные",
+            "📈 Распределения",
+            "🔬 Спектральный анализ",
+            "🔍 Анализ образцов",
+            "📋 Статистика",
+            "🔮 Инференс"
+        ]
         
         tabs = st.tabs(tab_names)
-        tab_features, tab1, tab2, tab3, tab4, tab5, tab_methods = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
-        tab_comparison = tabs[7] if enable_comparison else None
+        tab_features, tab1, tab2, tab3, tab4, tab5, tab_inference = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
 
         with tab1:
             st.header("Загруженные данные")
@@ -1355,13 +1419,6 @@ def render_dashboard():
                         cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
                         for key in cache_keys_to_remove:
                             del st.session_state[key]
-                        # Очищаем результаты кластеризаций (они зависят от признаков и PCA)
-                        if "clusterer" in st.session_state:
-                            del st.session_state.clusterer
-                        if "cluster_scorer" in st.session_state:
-                            del st.session_state.cluster_scorer
-                        if "df_with_cluster_scores" in st.session_state:
-                            del st.session_state.df_with_cluster_scores
                         
                         # Сохраняем в конфигурационный файл
                         if save_feature_config(selected_features_list):
@@ -1673,53 +1730,21 @@ def render_dashboard():
 
         with tab2:
             st.header("Распределения признаков")
+            st.info("💡 Отображаются распределения только для признаков, выбранных в секции '🎯 Выбор признаков'.")
 
             if len(df_features) > 0:
-                # Выбор признаков для визуализации
-                numeric_cols = df_features.select_dtypes(
-                    include=[np.number]
-                ).columns.tolist()
-                if "image" in numeric_cols:
-                    numeric_cols.remove("image")
-
-                # Инициализируем session_state для выбранных признаков
-                # По умолчанию выбираем все признаки для визуализации
-                if "selected_features_distribution" not in st.session_state:
-                    st.session_state.selected_features_distribution = numeric_cols
-                
-                # Фильтруем сохраненные значения, чтобы они были только из доступных опций
-                saved_features = st.session_state.selected_features_distribution
-                valid_default = [f for f in saved_features if f in numeric_cols]
-                
-                # Если нет валидных значений, используем все доступные
-                if not valid_default:
-                    valid_default = numeric_cols
-                    st.session_state.selected_features_distribution = valid_default
-
-                st.info("💡 Выберите признаки, затем нажмите кнопку 'Обновить' для применения изменений.")
-                
-                with st.form("feature_distribution_form", clear_on_submit=False):
-                    selected_features = st.multiselect(
-                        "Выберите признаки для визуализации",
-                        numeric_cols,
-                        default=valid_default,
-                        key="selected_features_distribution_form",
-                    )
-                    
-                    submitted = st.form_submit_button("🔄 Обновить", use_container_width=True)
-                    if submitted:
-                        st.session_state.selected_features_distribution = selected_features
-                        st.rerun()
-                
-                # Используем сохраненные значения, но фильтруем только существующие колонки
-                selected_features = st.session_state.selected_features_distribution
-                # Фильтруем только те признаки, которые действительно есть в DataFrame
-                selected_features = [f for f in selected_features if f in df_features.columns]
-                # Обновляем session_state с валидными признаками
-                if len(selected_features) != len(st.session_state.selected_features_distribution):
-                    st.session_state.selected_features_distribution = selected_features
+                # Используем только признаки, выбранные в секции "🎯 Выбор признаков"
+                if "selected_features" in st.session_state and st.session_state.selected_features:
+                    selected_features = [
+                        f for f in st.session_state.selected_features 
+                        if f in df_features.columns
+                    ]
+                else:
+                    selected_features = []
 
                 if selected_features:
+                    st.markdown(f"**Выбрано признаков для анализа: {len(selected_features)}**")
+                    
                     cols = st.columns(2)
 
                     for idx, feature in enumerate(selected_features):
@@ -1743,7 +1768,8 @@ def render_dashboard():
                             else:
                                 st.warning(f"Признак '{feature}' отсутствует в данных")
                 else:
-                    st.info("Выберите признаки для визуализации из списка выше.")
+                    st.warning("⚠️ Не выбрано ни одного признака для анализа.")
+                    st.info("💡 Перейдите в секцию '🎯 Выбор признаков' и выберите признаки для анализа.")
 
         with tab3:
             st.header("Спектральный анализ")
@@ -3214,507 +3240,6 @@ def render_dashboard():
                     - Значения из ноутбука (0.272) были на другом наборе образцов
                     - Текущие значения отражают важность признаков на ваших данных
                     """)
-                
-                # ============================================
-                # Секция кластеризации как дополнение к спектральному анализу
-                # ВРЕМЕННО ОТКЛЮЧЕНА - кластеризация пока не помогает
-                # ============================================
-                # st.markdown("---")
-                # st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
-                enable_clustering = False  # Временно отключено
-                
-                if enable_clustering:
-                    st.markdown("---")
-                    st.subheader("🔗 Кластеризация как дополнение к спектральному анализу")
-                    st.markdown("""
-                    **Кластеризация дополняет спектральный анализ**, выявляя структуру данных и позволяя проецировать 
-                    кластеры на единую спектральную шкалу через метод `spectrum_projection`.
-                    
-                    **Порядок работы:**
-                    1. ✅ Спектральный анализ уже выполнен выше
-                    2. Выполните кластеризацию ниже
-                    3. Примените маппинг кластеров на спектральную шкалу
-                    """)
-                
-                if enable_clustering and len(df_features) > 0:
-                    # Информация о спектральном анализе и рекомендации
-                    has_spectral_analyzer = "analyzer" in st.session_state
-                    gmm_n_components = None
-                    spectral_pca_n_components = None
-                    
-                    if has_spectral_analyzer:
-                        analyzer = st.session_state.analyzer
-                        if analyzer.pca is not None:
-                            spectral_pca_n_components = analyzer.pca.n_components_ if hasattr(analyzer.pca, 'n_components_') else len(analyzer.pca.explained_variance_)
-                        if analyzer.gmm is not None:
-                            gmm_n_components = analyzer.gmm.n_components
-                        
-                        st.info(f"""
-                        ✅ **Используется PCA из спектрального анализа** ({spectral_pca_n_components} компонент)
-                        {"✅ **GMM компоненты:** " + str(gmm_n_components) + " (можно использовать как ориентир для числа кластеров)" if gmm_n_components else ""}
-                        """)
-                    
-                    # Объяснение взаимосвязи
-                    with st.expander("ℹ️ Понимание взаимосвязи: GMM компоненты, PCA компоненты и кластеры", expanded=False):
-                        st.markdown("""
-                        ### 🔬 Разница между компонентами:
-                        
-                        **1. PCA компоненты** (например, 30 компонент):
-                        - Это **направления максимальной вариации** в данных
-                        - Используются для **снижения размерности** (30 признаков → 30 PCA компонент)
-                        - **Одинаковые** для спектрального анализа и кластеризации (если используем один PCA)
-                        
-                        **2. GMM компоненты** (например, 2 компонента):
-                        - Это **стабильные состояния** (моды) в распределении PC1
-                        - Показывают, сколько **разных патологических состояний** обнаружено
-                        - **Не то же самое**, что кластеры!
-                        
-                        **3. Кластеры** (например, 3 кластера):
-                        - Это **группы похожих образцов** в пространстве признаков
-                        - Могут соответствовать GMM компонентам, но не обязательно
-                        - Зависят от метода кластеризации и параметров
-                        
-                        ### 💡 Рекомендации по выбору параметров:
-                        
-                        **Если GMM нашел 2 компонента:**
-                        - Можно попробовать **2 кластера** (соответствие GMM компонентам)
-                        - Или **3-4 кластера** (более детальная структура)
-                        - HDBSCAN сам определит оптимальное число
-                        
-                        **Число PCA компонент:**
-                        - Используйте **те же PCA компоненты**, что в спектральном анализе ✅
-                        - Можно ограничить до **10-15 компонент** для кластеризации (меньше шума)
-                        - Или использовать **все компоненты** (максимальная информация)
-                        
-                        **Почему обычно используют 10 компонент?**
-                        - **Первые компоненты** содержат большую часть информации (80-90% вариации)
-                        - **Последние компоненты** (20-30) содержат в основном шум и мелкие детали
-                        - **Компромисс:** больше компонент = больше информации, но и больше шума
-                        - **Для кластеризации:** обычно достаточно первых 10-15 компонент
-                        
-                        **Когда увеличить до 30?**
-                        - Если **Silhouette Score низкий** (< 0.4) - больше компонент может улучшить разделение
-                        - Если **много шума** (> 20%) - больше компонент может помочь найти структуру
-                        - Если **кластеры не интерпретируются** - больше информации может помочь
-                        - Если **данные сложные** - может потребоваться больше измерений
-                        
-                        **Риски увеличения до 30:**
-                        - Больше **шума** в последних компонентах может ухудшить кластеризацию
-                        - **Переобучение** - алгоритм может найти ложные паттерны
-                        - **Вычислительная сложность** - медленнее работа
-                        
-                        **Рекомендация:** Начните с 10, если метрики плохие - попробуйте 15-20, затем 30
-                        """)
-                    
-                    # Настройки кластеризации
-                    with st.expander("⚙️ Настройки кластеризации", expanded=False):
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            clustering_method = st.selectbox(
-                                "Метод кластеризации",
-                                ["hdbscan", "agglomerative", "kmeans"],
-                                help="HDBSCAN: автоматическое определение числа кластеров. Agglomerative/KMeans: требуется указать число кластеров.",
-                                key="clustering_method_spectral"
-                            )
-                        
-                        with col2:
-                            if clustering_method == "hdbscan":
-                                min_cluster_size = st.slider("Минимальный размер кластера", 2, 10, 2, key="min_cluster_size_spectral")
-                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
-                                n_clusters = None
-                            elif clustering_method == "agglomerative":
-                                # Рекомендация на основе GMM
-                                suggested_clusters = gmm_n_components if gmm_n_components else 3
-                                n_clusters = st.slider(
-                                    "Число кластеров", 
-                                    2, 10, 
-                                    suggested_clusters,
-                                    help=f"Рекомендация на основе GMM: {gmm_n_components} компонент" if gmm_n_components else None,
-                                    key="n_clusters_agglomerative_spectral"
-                                )
-                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
-                                min_cluster_size = None
-                            else:  # kmeans
-                                # Рекомендация на основе GMM
-                                suggested_clusters = gmm_n_components if gmm_n_components else 3
-                                n_clusters = st.slider(
-                                    "Число кластеров", 
-                                    2, 10, 
-                                    suggested_clusters,
-                                    help=f"Рекомендация на основе GMM: {gmm_n_components} компонент" if gmm_n_components else None,
-                                    key="n_clusters_kmeans_spectral"
-                                )
-                                use_pca_clustering = st.checkbox("Использовать PCA из спектрального анализа", value=True, key="use_pca_clustering_spectral", disabled=not has_spectral_analyzer)
-                                min_cluster_size = None
-                        
-                        with col3:
-                            if use_pca_clustering:
-                                if has_spectral_analyzer and spectral_pca_n_components:
-                                    max_components = min(spectral_pca_n_components, 30)
-                                    default_components = min(10, spectral_pca_n_components)
-                                    
-                                    # Показываем объяснение выбора числа компонент
-                                    if spectral_pca_n_components > 10:
-                                        help_text = f"""Используются первые N компонент из {spectral_pca_n_components} компонент спектрального анализа.
-
-💡 Рекомендации:
-• 10 компонент (по умолчанию): первые компоненты содержат 80-90% информации, меньше шума
-• 15-20 компонент: если метрики кластеризации низкие, больше информации может помочь
-• 30 компонент: максимум информации, но последние компоненты могут содержать шум
-
-Почему не все 30? Последние компоненты PCA обычно содержат шум и могут ухудшить кластеризацию."""
-                                    else:
-                                        help_text = f"Используются первые N компонент из {spectral_pca_n_components} компонент спектрального анализа"
-                                    
-                                    pca_components_clustering = st.slider(
-                                        f"Число компонент PCA (доступно: {spectral_pca_n_components})", 
-                                        2, max_components, 
-                                        default_components,
-                                        help=help_text,
-                                        key="pca_components_clustering_spectral"
-                                    )
-                                    
-                                    # Показываем объяснение выбора
-                                    if pca_components_clustering < 15:
-                                        st.caption(f"✅ Используется {pca_components_clustering} компонент - оптимальный баланс между информацией и шумом")
-                                    elif pca_components_clustering < 25:
-                                        st.caption(f"ℹ️ Используется {pca_components_clustering} компонент - больше информации, но может быть больше шума")
-                                    else:
-                                        st.caption(f"⚠️ Используется {pca_components_clustering} компонент - максимум информации, но последние компоненты могут содержать шум")
-                                else:
-                                    pca_components_clustering = st.slider("Число компонент PCA", 2, 20, 10, key="pca_components_clustering_spectral")
-                            else:
-                                pca_components_clustering = None
-                    
-                    # Запуск кластеризации
-                    if st.button("🚀 Запустить кластеризацию", type="primary", key="run_clustering_spectral"):
-                        with st.spinner("Выполняется кластеризация..."):
-                            try:
-                                clusterer = clustering.ClusterAnalyzer(
-                                    method=clustering_method,
-                                    n_clusters=n_clusters,
-                                    random_state=42,
-                                )
-                                
-                                # Передаем PCA и scaler из спектрального анализа, если доступны
-                                fit_kwargs = {
-                                    "use_pca": use_pca_clustering,
-                                    "pca_components": pca_components_clustering if use_pca_clustering else None,
-                                    "min_cluster_size": min_cluster_size if clustering_method == "hdbscan" else 2,
-                                }
-                                
-                                # Определяем, какой DataFrame использовать для кластеризации
-                                # Если используется внешний scaler из спектрального анализа, нужен полный набор данных
-                                if has_spectral_analyzer and use_pca_clustering:
-                                    fit_kwargs["external_pca"] = analyzer.pca
-                                    fit_kwargs["external_scaler"] = analyzer.scaler
-                                    # Передаем те же признаки, что использовались при обучении PCA
-                                    if analyzer.feature_columns is not None:
-                                        fit_kwargs["feature_columns"] = analyzer.feature_columns
-                                    st.info(f"✅ Используется PCA из спектрального анализа ({spectral_pca_n_components} компонент, используется {pca_components_clustering})")
-                                    
-                                    # Используем полный набор данных, чтобы все признаки из PCA были доступны
-                                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                                        df_for_clustering = st.session_state.df_features_full
-                                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                                        df_for_clustering = st.session_state.df_features_for_selection
-                                    else:
-                                        df_for_clustering = df_features
-                                else:
-                                    df_for_clustering = df_features
-                                
-                                clusterer.fit(df_for_clustering, **fit_kwargs)
-                                
-                                # Сохраняем в session state
-                                st.session_state.clusterer = clusterer
-                                
-                                st.success("✅ Кластеризация завершена!")
-                                
-                            except Exception as e:
-                                st.error(f"Ошибка при кластеризации: {e}")
-                                import traceback
-                                st.code(traceback.format_exc())
-                    
-                    # Отображение результатов кластеризации
-                    if "clusterer" in st.session_state:
-                        clusterer = st.session_state.clusterer
-                        
-                        # Метрики
-                        st.markdown("#### 📊 Метрики качества кластеризации")
-                        # Используем тот же DataFrame, что и при обучении кластеризации
-                        if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                            df_for_metrics = st.session_state.df_features_full
-                        elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                            df_for_metrics = st.session_state.df_features_for_selection
-                        else:
-                            df_for_metrics = df_features
-                        metrics = clusterer.get_metrics(df_for_metrics)
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Число кластеров", metrics["n_clusters"])
-                        with col2:
-                            noise_count = metrics["n_noise"]
-                            total_samples = metrics.get("n_samples", noise_count + metrics["n_clusters"] * 10)
-                            noise_percent = (noise_count / total_samples * 100) if total_samples > 0 else 0
-                            st.metric("Шум (outliers)", f"{noise_count} ({noise_percent:.1f}%)")
-                        with col3:
-                            if not np.isnan(metrics.get("silhouette_score", np.nan)):
-                                silhouette = metrics['silhouette_score']
-                                st.metric("Silhouette Score", f"{silhouette:.3f}")
-                            else:
-                                st.metric("Silhouette Score", "N/A")
-                        with col4:
-                            if not np.isnan(metrics.get("calinski_harabasz_score", np.nan)):
-                                ch_score = metrics['calinski_harabasz_score']
-                                st.metric("Calinski-Harabasz", f"{ch_score:.1f}")
-                            else:
-                                st.metric("Calinski-Harabasz", "N/A")
-                        
-                        # Интерпретация метрик и рекомендации
-                        with st.expander("📊 Интерпретация метрик и рекомендации", expanded=True):
-                            silhouette = metrics.get("silhouette_score", np.nan)
-                            ch_score = metrics.get("calinski_harabasz_score", np.nan)
-                            n_clusters = metrics["n_clusters"]
-                            n_noise = metrics["n_noise"]
-                            n_samples = metrics.get("n_samples", n_noise + n_clusters * 10)
-                            noise_percent = (n_noise / n_samples * 100) if n_samples > 0 else 0
-                            
-                            # Оценка Silhouette Score
-                            if not np.isnan(silhouette):
-                                if silhouette < 0.25:
-                                    silhouette_status = "🔴 Слабое разделение"
-                                    silhouette_advice = "Кластеры плохо разделены. Попробуйте увеличить число PCA компонент или изменить метод кластеризации."
-                                elif silhouette < 0.5:
-                                    silhouette_status = "🟡 Приемлемое разделение"
-                                    silhouette_advice = "Кластеры разделены приемлемо. Можно улучшить, увеличив число PCA компонент или изменив параметры."
-                                elif silhouette < 0.7:
-                                    silhouette_status = "🟢 Хорошее разделение"
-                                    silhouette_advice = "Кластеры хорошо разделены. Результат хороший!"
-                                else:
-                                    silhouette_status = "🟢 Отличное разделение"
-                                    silhouette_advice = "Отличное разделение кластеров!"
-                                
-                                st.markdown(f"**Silhouette Score ({silhouette:.3f}):** {silhouette_status}")
-                                st.caption(silhouette_advice)
-                            
-                            # Оценка шума
-                            if noise_percent > 30:
-                                noise_status = "🔴 Слишком много шума"
-                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - это много. Попробуйте уменьшить `min_cluster_size` или увеличить число PCA компонент."
-                            elif noise_percent > 15:
-                                noise_status = "🟡 Много шума"
-                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных. Можно попробовать уменьшить `min_cluster_size` или использовать другой метод кластеризации."
-                            elif noise_percent > 5:
-                                noise_status = "🟡 Умеренный шум"
-                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - это нормально для HDBSCAN."
-                            else:
-                                noise_status = "🟢 Мало шума"
-                                noise_advice = f"Шум составляет {noise_percent:.1f}% данных - отлично!"
-                            
-                            st.markdown(f"**Шум (outliers):** {noise_status} ({n_noise} образцов, {noise_percent:.1f}%)")
-                            st.caption(noise_advice)
-                            
-                            # Общие рекомендации
-                            st.markdown("---")
-                            st.markdown("**💡 Рекомендации по улучшению:**")
-                            recommendations = []
-                            
-                            if not np.isnan(silhouette) and silhouette < 0.5:
-                                recommendations.append("• Увеличьте число PCA компонент (попробуйте 15-20 вместо 10)")
-                                recommendations.append("• Попробуйте другой метод кластеризации (Agglomerative или KMeans с фиксированным числом кластеров)")
-                            
-                            if noise_percent > 15:
-                                recommendations.append("• Уменьшите `min_cluster_size` (попробуйте 2-3)")
-                                recommendations.append("• Увеличьте число PCA компонент для лучшего разделения")
-                            
-                            if n_clusters == 2 and has_spectral_analyzer and gmm_n_components:
-                                if gmm_n_components != 2:
-                                    recommendations.append(f"• GMM нашел {gmm_n_components} компонент, попробуйте Agglomerative/KMeans с {gmm_n_components} кластерами")
-                            
-                            if not recommendations:
-                                recommendations.append("• Результаты выглядят хорошо! Можно применить маппинг на score.")
-                            
-                            for rec in recommendations:
-                                st.markdown(rec)
-                            
-                            # Предупреждение о структуре данных
-                            if not np.isnan(silhouette) and silhouette < 0.3 and noise_percent > 20:
-                                st.warning("⚠️ **Возможная проблема:** Данные могут не иметь четкой кластерной структуры. Это нормально для биомедицинских данных - кластеризация все равно может быть полезна для группировки похожих образцов.")
-                        
-                        # Маппинг кластеров на спектральную шкалу
-                        st.markdown("#### 🎯 Маппинг кластеров на спектральную шкалу")
-                        st.info("✅ Используйте интегрированный метод 'spectrum_projection' для проецирования кластеров на единую спектральную шкалу.")
-                        
-                        # Выбор метода маппинга
-                        scoring_methods = ["spectrum_projection", "pathology_features", "pc1_centroid", "distance_from_normal"]
-                        
-                        scoring_method = st.selectbox(
-                            "Метод маппинга кластеров на score",
-                            scoring_methods,
-                            help="spectrum_projection: интегрированный подход со спектральным анализом (единая шкала, моды, процентили)",
-                            key="scoring_method_spectral"
-                        )
-                        
-                        # Проверяем, есть ли кластеры перед маппингом
-                        has_clusters = False
-                        if "clusterer" in st.session_state:
-                            clusterer_check = st.session_state.clusterer
-                            if clusterer_check.labels_ is not None:
-                                n_clusters_found = len(set(clusterer_check.labels_)) - (1 if -1 in clusterer_check.labels_ else 0)
-                                has_clusters = n_clusters_found > 0
-                                if not has_clusters:
-                                    st.warning("⚠️ Кластеризация не нашла кластеры (все образцы - шум). Маппинг невозможен. Попробуйте изменить параметры кластеризации.")
-                        
-                        if st.button("🎯 Применить маппинг на score", type="primary", key="apply_scoring_spectral", disabled=not has_clusters):
-                            with st.spinner("Выполняется маппинг кластеров на score..."):
-                                try:
-                                    scorer = cluster_scoring.ClusterScorer(
-                                        method=scoring_method,
-                                        use_percentiles=True,
-                                        percentile_low=1.0,
-                                        percentile_high=99.0
-                                    )
-                                    
-                                    # Передаем spectral_analyzer если используется spectrum_projection
-                                    kwargs = {}
-                                    if scoring_method == "spectrum_projection":
-                                        kwargs["spectral_analyzer"] = analyzer
-                                        kwargs["use_cluster_distribution"] = True
-                                    
-                                    # Используем тот же DataFrame, что и при обучении кластеризации
-                                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                                        df_for_scoring = st.session_state.df_features_full
-                                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                                        df_for_scoring = st.session_state.df_features_for_selection
-                                    else:
-                                        df_for_scoring = df_features
-                                    
-                                    df_with_scores = scorer.fit_transform(
-                                        df_for_scoring,
-                                        clusterer=clusterer,
-                                        **kwargs
-                                    )
-                                    
-                                    # Сохраняем scorer в session state
-                                    st.session_state.cluster_scorer = scorer
-                                    st.session_state.df_with_cluster_scores = df_with_scores
-                                    
-                                    st.success("✅ Маппинг кластеров на score завершен!")
-                                    
-                                    # Показываем информацию о маппинге
-                                    cluster_scores = scorer.get_cluster_scores()
-                                    st.markdown("**Маппинг кластеров на score:**")
-                                    st.dataframe(
-                                        pd.DataFrame({
-                                            "Кластер": cluster_scores.index,
-                                            "Score [0-1]": cluster_scores.values
-                                        }),
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
-                                    
-                                    # Если используется spectrum_projection, показываем дополнительную информацию
-                                    if scoring_method == "spectrum_projection":
-                                        cluster_modes = scorer.get_cluster_modes()
-                                        if cluster_modes:
-                                            st.markdown("**Классификация кластеров по модам:**")
-                                            modes_df = pd.DataFrame({
-                                                "Кластер": list(cluster_modes.keys()),
-                                                "Мода": list(cluster_modes.values())
-                                            })
-                                            st.dataframe(modes_df, use_container_width=True, hide_index=True)
-                                        
-                                        cluster_distributions = scorer.get_cluster_distributions()
-                                        if cluster_distributions:
-                                            with st.expander("📊 Распределения внутри кластеров"):
-                                                dist_data = []
-                                                for cluster_id, dist in cluster_distributions.items():
-                                                    dist_data.append({
-                                                        "Кластер": cluster_id,
-                                                        "Медиана PC1": f"{dist['median']:.3f}",
-                                                        "Среднее PC1": f"{dist['mean']:.3f}",
-                                                        "P25": f"{dist['p25']:.3f}",
-                                                        "P75": f"{dist['p75']:.3f}",
-                                                        "Std": f"{dist['std']:.3f}",
-                                                        "Число образцов": dist['count']
-                                                    })
-                                                st.dataframe(pd.DataFrame(dist_data), use_container_width=True, hide_index=True)
-                                    
-                                    # Таблица с результатами
-                                    st.markdown("#### 📋 Результаты кластеризации с маппингом")
-                                    df_with_clusters = df_with_scores.copy()
-                                    
-                                    # Показываем распределение по кластерам
-                                    cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
-                                    cluster_info = pd.DataFrame({
-                                        "Кластер": cluster_counts.index,
-                                        "Число образцов": cluster_counts.values
-                                    })
-                                    
-                                    # Добавляем score и моды если есть
-                                    if "cluster_score" in df_with_clusters.columns:
-                                        cluster_scores_map = df_with_clusters.groupby("cluster")["cluster_score"].first()
-                                        cluster_info["Score"] = cluster_info["Кластер"].map(cluster_scores_map).round(3)
-                                    
-                                    if "cluster_mode" in df_with_clusters.columns:
-                                        cluster_modes_map = df_with_clusters.groupby("cluster")["cluster_mode"].first()
-                                        cluster_info["Мода"] = cluster_info["Кластер"].map(cluster_modes_map)
-                                    
-                                    st.dataframe(cluster_info, use_container_width=True, hide_index=True)
-                                    
-                                    # Таблица с образцами
-                                    display_cols = ["image", "cluster"]
-                                    if "cluster_score" in df_with_clusters.columns:
-                                        display_cols.append("cluster_score")
-                                    if "cluster_mode" in df_with_clusters.columns:
-                                        display_cols.append("cluster_mode")
-                                    if "PC1" in df_with_clusters.columns:
-                                        display_cols.append("PC1")
-                                    if "PC1_spectrum" in df_with_clusters.columns:
-                                        display_cols.append("PC1_spectrum")
-                                    
-                                    st.dataframe(
-                                        df_with_clusters[display_cols].sort_values("cluster"),
-                                        use_container_width=True,
-                                        hide_index=True
-                                    )
-                                    
-                                    # Скачивание результатов
-                                    csv_clusters = df_with_clusters.to_csv(index=False)
-                                    st.download_button(
-                                        label="📥 Скачать результаты кластеризации (CSV)",
-                                        data=csv_clusters,
-                                        file_name=f"clustering_spectral_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                        mime="text/csv",
-                                        key="download_clustering_spectral"
-                                    )
-                                    
-                                except Exception as e:
-                                    st.error(f"Ошибка при маппинге: {e}")
-                                    import traceback
-                                    st.code(traceback.format_exc())
-                        else:
-                            # Показываем базовую информацию о кластерах без маппинга
-                            # Используем тот же DataFrame, что и при обучении кластеризации
-                            if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                                df_for_transform = st.session_state.df_features_full
-                            elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                                df_for_transform = st.session_state.df_features_for_selection
-                            else:
-                                df_for_transform = df_features
-                            df_with_clusters = clusterer.transform(df_for_transform)
-                            cluster_counts = df_with_clusters["cluster"].value_counts().sort_index()
-                            st.markdown("**Распределение по кластерам:**")
-                            st.dataframe(
-                                pd.DataFrame({
-                                    "Кластер": cluster_counts.index,
-                                    "Число образцов": cluster_counts.values
-                                }),
-                                use_container_width=True,
-                                hide_index=True
-                            )
 
             else:
                 st.info("Включите спектральный анализ в настройках")
@@ -4155,332 +3680,311 @@ def render_dashboard():
                             else:
                                 st.info("Нет высоко коррелированных признаков")
 
-        # Вкладка сравнения методов
-        if tab_comparison is not None and enable_comparison:
-            with tab_comparison:
-                st.header("⚖️ Сравнение методов построения шкалы")
-                
-                # Проверка, какие методы выбраны
-                selected_methods = []
-                if use_pca_simple:
-                    selected_methods.append(("pca_simple", "PCA Scoring"))
-                if use_spectral_p1_p99:
-                    selected_methods.append(("spectral_p1_p99", "Spectral [1, 99]"))
-                if use_spectral_p05_p995:
-                    selected_methods.append(("spectral_p05_p995", "Spectral [0.5, 99.5]"))
-                if use_spectral_p5_p95:
-                    selected_methods.append(("spectral_p5_p95", "Spectral [5, 95]"))
-                if use_spectral_gmm:
-                    selected_methods.append(("spectral_gmm", "Spectral + GMM"))
-                if use_custom_spectral:
-                    selected_methods.append((
-                        f"spectral_custom_{custom_percentile_low}_{custom_percentile_high}",
-                        f"Spectral [{custom_percentile_low}, {custom_percentile_high}]"
-                    ))
-                
-                if not selected_methods:
-                    st.warning("Выберите хотя бы один метод для сравнения в боковой панели")
+        # Вкладка инференса
+        with tab_inference:
+            st.header("🔮 Инференс для новых WSI")
+            st.markdown("Примените обученную модель к новым WSI из выбранной директории.")
+            
+            # Проверяем, есть ли обученная модель
+            if "analyzer" not in st.session_state or st.session_state.get("analyzer") is None:
+                # Пробуем загрузить модель из эксперимента, если используется эксперимент
+                if use_experiment_data and "experiment_dir" in st.session_state:
+                    experiment_dir = Path(st.session_state.experiment_dir)
+                    model_path = experiment_dir / "spectral_analyzer.pkl"
+                    if model_path.exists():
+                        try:
+                            analyzer = spectral_analysis.SpectralAnalyzer()
+                            analyzer.load(model_path)
+                            st.session_state.analyzer = analyzer
+                            st.success(f"✅ Загружена модель из эксперимента: {experiment_dir.name}")
+                            st.info(f"ℹ️ Модель использует {len(analyzer.feature_columns) if analyzer.feature_columns else 0} признаков")
+                        except Exception as e:
+                            st.error(f"❌ Не удалось загрузить модель из эксперимента: {e}")
+                            analyzer = None
+                    else:
+                        st.warning("⚠️ Модель не найдена в эксперименте.")
+                        analyzer = None
                 else:
-                    st.info(f"Сравнивается {len(selected_methods)} методов")
-                    
-                    # Инициализация сравнения
-                    comparison = scale_comparison.ScaleComparison()
-                    
-                    # Запуск выбранных методов
-                    with st.spinner("Запуск методов..."):
-                        progress_bar = st.progress(0)
-                        total_methods = len(selected_methods)
+                    st.warning("⚠️ Сначала выполните спектральный анализ для обучения модели.")
+                    st.info("💡 Перейдите на вкладку '🔬 Спектральный анализ' и выполните анализ данных.")
+                    analyzer = None
+            else:
+                analyzer = st.session_state.analyzer
+                # Показываем информацию о модели
+                if use_experiment_data and "experiment_dir" in st.session_state:
+                    experiment_dir = Path(st.session_state.experiment_dir)
+                    st.info(f"ℹ️ Используется модель из эксперимента: **{experiment_dir.name}**")
+                if analyzer.feature_columns:
+                    st.caption(f"Модель обучена на {len(analyzer.feature_columns)} признаках")
+            
+            if analyzer is None:
+                st.stop()
+            
+            if "inference_dir" not in st.session_state or not Path(st.session_state.inference_dir).exists():
+                st.info("💡 Выберите директорию для инференса в боковой панели (секция '🔮 Инференс').")
+            else:
+                inference_dir = Path(st.session_state.inference_dir)
+                json_files = list(inference_dir.glob("*.json"))
+                
+                if not json_files:
+                    st.warning(f"⚠️ В директории {inference_dir} нет JSON файлов.")
+                    st.info(f"💡 Поместите JSON файлы с предсказаниями в директорию `{inference_dir}`")
+                else:
+                    # ВАЖНО: Определяем тип признаков по модели, а не по настройкам!
+                    # Модель была обучена на определенных признаках, нужно использовать те же
+                    use_relative_features_for_inference = True  # По умолчанию
+                    if analyzer.feature_columns:
+                        # Проверяем, какие признаки использовались при обучении
+                        # Если есть хотя бы один относительный признак - используем относительные
+                        has_relative = any("_relative_" in feat for feat in analyzer.feature_columns)
+                        has_absolute = any("_relative_" not in feat and feat not in ["image"] for feat in analyzer.feature_columns)
                         
-                        for idx, (method_key, method_name) in enumerate(selected_methods):
+                        if has_relative and not has_absolute:
+                            use_relative_features_for_inference = True
+                        elif has_absolute and not has_relative:
+                            use_relative_features_for_inference = False
+                        else:
+                            # Если смешанные, используем настройки из session_state
+                            use_relative_features_for_inference = st.session_state.get("settings", {}).get("use_relative_features", True)
+                            st.warning("⚠️ Модель использует смешанные признаки. Используются настройки из session_state.")
+                    else:
+                        # Если нет информации о признаках, используем настройки из session_state
+                        use_relative_features_for_inference = st.session_state.get("settings", {}).get("use_relative_features", True)
+                    
+                    st.info(f"ℹ️ Тип признаков для инференса: **{'Относительные' if use_relative_features_for_inference else 'Абсолютные'}** (определено по модели)")
+                    
+                    # Ключ кэша для инференса
+                    inference_cache_key = f"inference_{inference_dir}_{hash(str(sorted([f.name for f in json_files])))}"
+                    
+                    if inference_cache_key in st.session_state:
+                        df_inference_spectrum = st.session_state[inference_cache_key]
+                        st.info(f"✅ Загружены результаты инференса для {len(df_inference_spectrum)} образцов (из кэша)")
+                    else:
+                        with st.spinner(f"Выполняется инференс для {len(json_files)} файлов..."):
                             try:
-                                if method_key == "pca_simple":
-                                    comparison.test_pca_scoring(df_features, name=method_key)
+                                # Загружаем предсказания
+                                inference_predictions = {}
+                                for json_file in json_files:
+                                    try:
+                                        preds = domain.predictions_from_json(str(json_file))
+                                        image_name = json_file.stem
+                                        inference_predictions[image_name] = preds
+                                    except Exception as e:
+                                        st.warning(f"Ошибка при загрузке {json_file.name}: {e}")
                                 
-                                elif method_key == "spectral_p1_p99":
-                                    comparison.test_spectral_analysis(
-                                        df_features,
-                                        name=method_key,
-                                        percentile_low=1.0,
-                                        percentile_high=99.0,
-                                        use_gmm=False
-                                    )
-                                
-                                elif method_key == "spectral_p05_p995":
-                                    comparison.test_spectral_analysis(
-                                        df_features,
-                                        name=method_key,
-                                        percentile_low=0.5,
-                                        percentile_high=99.5,
-                                        use_gmm=False
-                                    )
-                                
-                                elif method_key == "spectral_p5_p95":
-                                    comparison.test_spectral_analysis(
-                                        df_features,
-                                        name=method_key,
-                                        percentile_low=5.0,
-                                        percentile_high=95.0,
-                                        use_gmm=False
-                                    )
-                                
-                                elif method_key == "spectral_gmm":
-                                    comparison.test_spectral_analysis(
-                                        df_features,
-                                        name=method_key,
-                                        percentile_low=1.0,
-                                        percentile_high=99.0,
-                                        use_gmm=True
-                                    )
-                                
-                                elif method_key.startswith("spectral_custom_"):
-                                    comparison.test_spectral_analysis(
-                                        df_features,
-                                        name=method_key,
-                                        percentile_low=custom_percentile_low,
-                                        percentile_high=custom_percentile_high,
-                                        use_gmm=False
-                                    )
-                                
-                                progress_bar.progress((idx + 1) / total_methods)
-                                
+                                if not inference_predictions:
+                                    st.error("❌ Не удалось загрузить ни одного файла для инференса")
+                                    df_inference_spectrum = None
+                                else:
+                                    # Агрегируем данные
+                                    inference_rows = []
+                                    for image_name, preds in inference_predictions.items():
+                                        pred_stats = aggregate.aggregate_predictions_from_dict(
+                                            preds, image_name
+                                        )
+                                        inference_rows.append(pred_stats)
+                                    
+                                    df_inference = pd.DataFrame(inference_rows)
+                                    
+                                    # Создаем признаки (используем ТОЧНО те же настройки, что и для обучения модели)
+                                    if use_relative_features_for_inference:
+                                        df_inference_features_full = aggregate.create_relative_features(df_inference)
+                                    else:
+                                        df_inference_features_full = df_inference.copy()
+                                        # Удаляем относительные признаки, если они случайно попали
+                                        relative_cols = [col for col in df_inference_features_full.columns if 'relative' in col.lower()]
+                                        if relative_cols:
+                                            df_inference_features_full = df_inference_features_full.drop(columns=relative_cols)
+                                        # Удаляем White space
+                                        white_space_cols = [col for col in df_inference_features_full.columns if 'white space' in col.lower()]
+                                        if white_space_cols:
+                                            df_inference_features_full = df_inference_features_full.drop(columns=white_space_cols)
+                                    
+                                    # Показываем информацию о созданных признаках
+                                    st.caption(f"Создано признаков: {len(df_inference_features_full.columns) - 1} (тип: {'относительные' if use_relative_features_for_inference else 'абсолютные'})")
+                                    
+                                    # ВАЖНО: Используем ТОЧНО те же признаки, что были при обучении модели
+                                    # Это гарантирует идентичные результаты между обучением и инференсом
+                                    if analyzer.feature_columns is not None:
+                                        # Берем только те признаки, которые использовались при обучении
+                                        required_features = analyzer.feature_columns.copy()
+                                        
+                                        # Проверяем наличие всех необходимых признаков
+                                        missing_features = [f for f in required_features if f not in df_inference_features_full.columns]
+                                        
+                                        # Автоматически добавляем недостающие признаки с нулевыми значениями
+                                        if missing_features:
+                                            for feat in missing_features:
+                                                df_inference_features_full[feat] = 0.0
+                                            
+                                            st.info(f"ℹ️ Автоматически добавлено {len(missing_features)} недостающих признаков с нулевыми значениями: {', '.join(missing_features[:3])}{'...' if len(missing_features) > 3 else ''}")
+                                        
+                                        # Используем ТОЛЬКО признаки из модели (в том же порядке)
+                                        # Это критически важно для получения идентичных результатов!
+                                        df_inference_features = df_inference_features_full[["image"] + required_features].copy()
+                                        
+                                        st.info(f"ℹ️ Используется {len(required_features)} признаков из обученной модели (те же, что при обучении)")
+                                        
+                                        # Преобразуем через PCA
+                                        df_inference_pca = analyzer.transform_pca(df_inference_features)
+                                        
+                                        # Преобразуем в спектральную шкалу
+                                        df_inference_spectrum = analyzer.transform_to_spectrum(
+                                            df_inference_pca, 
+                                            use_gmm_classification=False
+                                        )
+                                        
+                                        # Сохраняем в кэш
+                                        st.session_state[inference_cache_key] = df_inference_spectrum
+                                        st.success(f"✅ Инференс выполнен для {len(df_inference_spectrum)} образцов")
+                                    else:
+                                        st.error("❌ Модель не содержит информацию о признаках")
+                                        df_inference_spectrum = None
+                                        
                             except Exception as e:
-                                st.error(f"Ошибка при выполнении {method_name}: {e}")
+                                st.error(f"❌ Ошибка при инференсе: {e}")
                                 import traceback
                                 st.code(traceback.format_exc())
+                                df_inference_spectrum = None
                     
-                    progress_bar.empty()
-                    
-                    # Сравнение результатов
-                    try:
-                        comparison_df = comparison.compare_results()
-                        stats_df = comparison.get_statistics()
+                    # Показываем результаты инференса
+                    df_inference_spectrum = st.session_state.get(inference_cache_key)
+                    if df_inference_spectrum is not None:
+                        # Получаем обучающие данные для сравнения
+                        if "df_spectrum" in st.session_state:
+                            df_spectrum_train = st.session_state.df_spectrum
+                        else:
+                            df_spectrum_train = None
                         
-                        # Отображение статистики
-                        st.subheader("📊 Статистика по методам")
-                        st.dataframe(stats_df, use_container_width=True)
+                        # График с точками инференса
+                        st.markdown("**📊 Распределение WSI на спектральной шкале (с точками инференса)**")
+                        fig_inference, ax_inference = plt.subplots(figsize=(14, 6))
                         
-                        # Таблица сравнения
-                        st.subheader("📋 Сравнение шкал для каждого образца")
-                        st.dataframe(comparison_df, use_container_width=True)
-                        
-                        # Визуализация
-                        st.subheader("📈 Визуализация сравнения")
-                        
-                        # Создание временного файла для графика
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                            tmp_path = Path(tmp_file.name)
-                        
-                        try:
-                            comparison.visualize_comparison(save_path=tmp_path)
-                            if tmp_path.exists():
-                                st.image(str(tmp_path))
-                                # Скачивание графика
-                                with open(tmp_path, "rb") as f:
-                                    st.download_button(
-                                        label="📥 Скачать график сравнения",
-                                        data=f.read(),
-                                        file_name=f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
-                                        mime="image/png"
-                                    )
-                        finally:
-                            if tmp_path.exists():
-                                tmp_path.unlink()
-                        
-                        # Скачивание результатов
-                        st.subheader("💾 Скачивание результатов")
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            csv_comparison = comparison_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Скачать сравнение (CSV)",
-                                data=csv_comparison,
-                                file_name=f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv"
+                        # Гистограмма для обучающих данных (если есть)
+                        if df_spectrum_train is not None:
+                            spectrum_values_train = df_spectrum_train["PC1_spectrum"].dropna().values
+                            counts_train, bins_train, patches_train = ax_inference.hist(
+                                spectrum_values_train,
+                                bins=30,
+                                alpha=0.4,
+                                color='lightblue',
+                                edgecolor='black',
+                                linewidth=0.5,
+                                label='Обучающие данные (гистограмма)'
                             )
-                        
-                        with col2:
-                            csv_stats = stats_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Скачать статистику (CSV)",
-                                data=csv_stats,
-                                file_name=f"statistics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv"
-                            )
-                        
-                        # Сохранение в session state для возможности сохранения эксперимента
-                        st.session_state.comparison = comparison
-                        st.session_state.comparison_df = comparison_df
-                        st.session_state.stats_df = stats_df
-                        
-                    except Exception as e:
-                        st.error(f"Ошибка при сравнении результатов: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
-
-        # Вкладка сравнения разных методов построения шкалы
-        with tab_methods:
-            st.header("🔬 Сравнение методов построения шкалы")
-            st.markdown("""
-            Сравните разные подходы к построению шкалы патологии:
-            - **PCA Scoring**: простая нормализация PC1
-            - **Spectral Analysis**: PCA + выявление мод через KDE/GMM
-            - **Cluster-based Scoring**: кластеризация + маппинг кластеров на шкалу
-            """)
-            
-            if len(df_features) > 0:
-                st.subheader("📊 Доступные результаты")
-                
-                # Проверяем, есть ли результаты PCA/Spectral в session state
-                has_pca = "analyzer" in st.session_state or "df_results" in st.session_state
-                has_cluster = "cluster_scorer" in st.session_state and "df_with_cluster_scores" in st.session_state
-                
-                if not has_pca and not has_cluster:
-                    st.warning("⚠️ Нет результатов для сравнения")
-                    st.info("""
-                    **Для сравнения методов:**
-                    1. Выполните спектральный анализ на вкладке "🔬 Спектральный анализ"
-                    2. (Опционально) Выполните кластеризацию в той же вкладке и примените маппинг на score
-                    3. Затем вернитесь сюда для сравнения методов
-                    """)
-                else:
-                    # Создаем объект сравнения
-                    method_comp = method_comparison.MethodComparison()
-                    
-                    # Добавляем PCA/Spectral результаты
-                    if has_pca and "df_results" in st.session_state:
-                        df_results = st.session_state.df_results
-                        if "PC1_norm" in df_results.columns:
-                            method_comp.add_pca_result("PCA Scoring", df_results)
-                        if "PC1_spectrum" in df_results.columns:
-                            method_comp.add_spectral_result("Spectral Analysis", df_results)
-                    
-                    # Добавляем кластерные результаты (если есть из спектрального анализа)
-                    if "cluster_scorer" in st.session_state and "df_with_cluster_scores" in st.session_state:
-                        df_cluster_scores = st.session_state.df_with_cluster_scores
-                        if "cluster_score" in df_cluster_scores.columns:
-                            method_comp.add_cluster_result("Cluster Scoring (spectrum_projection)", df_cluster_scores)
-                    
-                    if len(method_comp.results) == 0:
-                        st.warning("⚠️ Нет валидных результатов для сравнения")
-                    elif len(method_comp.results) < 2:
-                        st.warning("⚠️ Нужно минимум 2 метода для сравнения")
-                        st.info("Выполните анализ на других вкладках, чтобы добавить больше методов")
-                    else:
-                        st.success(f"✅ Найдено {len(method_comp.results)} методов для сравнения")
-                        
-                        # Статистика
-                        st.subheader("📈 Статистика по методам")
-                        stats_df = method_comp.compute_statistics()
-                        st.dataframe(stats_df, use_container_width=True, hide_index=True)
-                        
-                        # Корреляции
-                        st.subheader("🔗 Корреляции между методами")
-                        try:
-                            corr_df = method_comp.compute_correlations()
-                            st.dataframe(corr_df, use_container_width=True, hide_index=True)
                             
-                            with st.expander("ℹ️ Как интерпретировать корреляции?"):
-                                st.markdown("""
-                                **Pearson correlation (r):**
-                                - Близко к 1: методы дают похожие результаты
-                                - Близко к 0: методы независимы
-                                - Близко к -1: методы противоположны
-                                
-                                **Spearman correlation (ρ):**
-                                - Аналогично Pearson, но для рангов
-                                - Менее чувствителен к выбросам
-                                - Показывает монотонную связь
-                                """)
-                        except Exception as e:
-                            st.error(f"Ошибка при вычислении корреляций: {e}")
+                            # Точки для обучающих данных
+                            np.random.seed(42)
+                            point_heights_train = []
+                            for val in spectrum_values_train:
+                                bin_idx = np.digitize(val, bins_train) - 1
+                                bin_idx = np.clip(bin_idx, 0, len(counts_train) - 1)
+                                height = counts_train[bin_idx] + np.random.uniform(0.1, 0.3)
+                                point_heights_train.append(height)
+                            
+                            point_heights_train = np.array(point_heights_train)
+                            colors_train = plt.cm.RdYlGn_r(spectrum_values_train)
+                            ax_inference.scatter(
+                                spectrum_values_train, point_heights_train,
+                                alpha=0.6, s=100, c=colors_train,
+                                edgecolors='black', linewidth=1, zorder=5,
+                                label='Обучающие данные'
+                            )
+                        else:
+                            # Если нет обучающих данных, создаем пустую гистограмму для масштаба
+                            bins_train = np.linspace(0, 1, 31)
+                            counts_train = np.zeros(30)
                         
-                        # Схожесть распределений
-                        st.subheader("📊 Схожесть распределений")
-                        try:
-                            dist_sim_df = method_comp.compute_distribution_similarity()
-                            st.dataframe(dist_sim_df, use_container_width=True, hide_index=True)
-                        except Exception as e:
-                            st.error(f"Ошибка при вычислении схожести: {e}")
+                        # Точки для инференса
+                        spectrum_values_inference = df_inference_spectrum["PC1_spectrum"].dropna().values
+                        image_names_inference = df_inference_spectrum.loc[df_inference_spectrum["PC1_spectrum"].notna(), "image"].values
                         
-                        # Визуализация
-                        st.subheader("📈 Визуализация сравнения")
-                        if st.button("📊 Создать графики сравнения методов"):
-                            with st.spinner("Создание графиков..."):
-                                try:
-                                    import tempfile
-                                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                                        tmp_path = Path(tmp_file.name)
-                                    
-                                    method_comp.visualize_comparison(save_path=tmp_path)
-                                    
-                                    if tmp_path.exists():
-                                        st.image(str(tmp_path))
-                                        
-                                        # Кнопка скачивания
-                                        with open(tmp_path, "rb") as f:
-                                            st.download_button(
-                                                label="📥 Скачать график",
-                                                data=f.read(),
-                                                file_name=f"method_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
-                                                mime="image/png"
-                                            )
-                                        
-                                        tmp_path.unlink()
-                                except Exception as e:
-                                    st.error(f"Ошибка при визуализации: {e}")
-                                    import traceback
-                                    st.code(traceback.format_exc())
+                        if len(spectrum_values_inference) > 0:
+                            point_heights_inference = []
+                            for val in spectrum_values_inference:
+                                bin_idx = np.digitize(val, bins_train) - 1
+                                bin_idx = np.clip(bin_idx, 0, len(counts_train) - 1)
+                                height = counts_train[bin_idx] + np.random.uniform(0.5, 0.8) if len(counts_train) > 0 else 1.0
+                                point_heights_inference.append(height)
+                            
+                            point_heights_inference = np.array(point_heights_inference)
+                            colors_inference = plt.cm.RdYlGn_r(spectrum_values_inference)
+                            
+                            # Рисуем точки инференса другим стилем
+                            ax_inference.scatter(
+                                spectrum_values_inference, point_heights_inference,
+                                alpha=0.9, s=200, c=colors_inference,
+                                edgecolors='red', linewidth=2.5, zorder=10,
+                                marker='*', label='Инференс (новые WSI)'
+                            )
+                            
+                            # Подписи для точек инференса
+                            for i, (x, y, name) in enumerate(zip(spectrum_values_inference, point_heights_inference, image_names_inference)):
+                                short_name = name[:20] + "..." if len(name) > 20 else name
+                                ax_inference.annotate(
+                                    short_name, (x, y), xytext=(5, 5),
+                                    textcoords='offset points', fontsize=9, alpha=0.9,
+                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7, edgecolor='red', linewidth=1.5),
+                                    fontweight='bold'
+                                )
                         
-                        # Рекомендация лучшего метода
-                        st.subheader("🏆 Рекомендация лучшего метода")
+                        # Отметка мод (если есть обучающие данные)
+                        if analyzer.modes and df_spectrum_train is not None:
+                            for mode in analyzer.modes:
+                                mode_spectrum = (mode["position"] - analyzer.pc1_p1) / (
+                                    analyzer.pc1_p99 - analyzer.pc1_p1
+                                )
+                                mode_spectrum = np.clip(mode_spectrum, 0.0, 1.0)
+                                ax_inference.axvline(
+                                    mode_spectrum,
+                                    color="r",
+                                    linestyle="--",
+                                    linewidth=2,
+                                    alpha=0.7,
+                                    label="Мода" if mode == analyzer.modes[0] else ""
+                                )
                         
-                        criteria = st.selectbox(
-                            "Критерий выбора",
-                            ["consistency", "spread", "correlation"],
-                            help="consistency: наименьшая вариативность. spread: наибольший разброс. correlation: наибольшая корреляция с другими методами."
+                        ax_inference.set_xlabel("Спектральная шкала (0-1)", fontsize=12)
+                        ax_inference.set_ylabel("Частота (количество образцов в bin)", fontsize=12)
+                        train_count = len(spectrum_values_train) if df_spectrum_train is not None else 0
+                        ax_inference.set_title(
+                            f"Распределение WSI на спектральной шкале\n"
+                            f"Обучающие данные: {train_count} образцов | "
+                            f"Инференс: {len(spectrum_values_inference) if len(spectrum_values_inference) > 0 else 0} образцов",
+                            fontsize=13
+                        )
+                        ax_inference.set_xlim(0, 1)
+                        ax_inference.set_ylim(bottom=0)
+                        ax_inference.grid(True, alpha=0.3, axis="both")
+                        ax_inference.legend(loc='upper right')
+                        plt.tight_layout()
+                        st.pyplot(fig_inference)
+                        
+                        # Таблица с результатами инференса
+                        st.markdown("**📋 Результаты инференса для каждого WSI**")
+                        st.markdown(
+                            "**Эта таблица показывает каждый WSI из инференса отдельно** - здесь вы можете увидеть точное значение "
+                            "спектральной шкалы для каждого нового образца."
+                        )
+                        inference_display_cols = ["image", "PC1", "PC1_spectrum"]
+                        if "PC1_mode" in df_inference_spectrum.columns:
+                            inference_display_cols.append("PC1_mode")
+                        
+                        st.dataframe(
+                            df_inference_spectrum[inference_display_cols].sort_values(
+                                by="PC1_spectrum", ascending=False
+                            ),
+                            use_container_width=True,
                         )
                         
-                        if st.button("🎯 Найти лучший метод"):
-                            with st.spinner("Анализ методов..."):
-                                try:
-                                    recommendation = method_comp.recommend_best(criteria=criteria)
-                                    
-                                    if recommendation.get("best"):
-                                        st.success(f"✅ **Рекомендуемый метод: {recommendation['best']}**")
-                                        st.info(f"💡 {recommendation['reason']}")
-                                        
-                                        if "scores" in recommendation:
-                                            st.markdown("**Оценки всех методов:**")
-                                            scores_df = pd.DataFrame([
-                                                {"Метод": k, "Score": f"{v:.4f}"}
-                                                for k, v in recommendation["scores"].items()
-                                            ])
-                                            st.dataframe(scores_df, use_container_width=True, hide_index=True)
-                                    else:
-                                        st.warning(f"⚠️ {recommendation.get('reason', 'Не удалось определить лучший метод')}")
-                                except Exception as e:
-                                    st.error(f"Ошибка при анализе: {e}")
-                        
-                        # Сравнение scores
-                        st.subheader("📋 Сравнение scores по образцам")
-                        try:
-                            comparison_df = method_comp.compare_scores()
-                            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-                            
-                            # Скачивание
-                            csv_comparison = comparison_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Скачать сравнение методов (CSV)",
-                                data=csv_comparison,
-                                file_name=f"method_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv"
-                            )
-                        except Exception as e:
-                            st.error(f"Ошибка при сравнении: {e}")
-            else:
-                st.info("Загрузите данные для сравнения методов")
+                        # Скачивание результатов инференса
+                        csv_inference = df_inference_spectrum[inference_display_cols].to_csv(index=False)
+                        st.download_button(
+                            label="📥 Скачать результаты инференса (CSV)",
+                            data=csv_inference,
+                            file_name=f"inference_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                        )
 
     else:
         # Нет данных для отображения
