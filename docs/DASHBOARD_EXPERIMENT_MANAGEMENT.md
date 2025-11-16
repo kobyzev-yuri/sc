@@ -22,7 +22,7 @@
 
 2. **Ручной выбор признаков:**
    - Можно вручную изменять признаки в dashboard
-   - Изменения сохраняются в `feature_selection_config_relative.json`
+   - Изменения сохраняются в `scale/cfg/feature_selection_config_relative.json`
    - Исходный эксперимент остается нетронутым
 
 3. **Отслеживание источника:**
@@ -54,7 +54,7 @@
    - Нажать "Сохранить конфигурацию"
 
 3. **Что происходит:**
-   - ✅ Изменения сохраняются в `feature_selection_config_relative.json`
+   - ✅ Изменения сохраняются в `scale/cfg/feature_selection_config_relative.json`
    - ✅ Исходный эксперимент НЕ изменяется
    - ✅ Сохраняется информация об исходном эксперименте
 
@@ -72,14 +72,14 @@ experiments/
     └── best_features_*.json          ← Исходный эксперимент (НЕ изменяется)
 
 scale/
-├── feature_selection_config_relative.json  ← Текущая конфигурация dashboard
+├── scale/cfg/feature_selection_config_relative.json  ← Текущая конфигурация dashboard
 │                                            (может быть изменена пользователем)
 └── feature_selection_config_relative_backup_*.json  ← Резервные копии
 ```
 
 **Важно:**
 - Исходные эксперименты (`experiments/*/best_features_*.json`) **НЕ изменяются**
-- Изменения сохраняются только в `feature_selection_config_relative.json`
+- Изменения сохраняются только в `scale/cfg/feature_selection_config_relative.json`
 - Можно всегда вернуться к исходной конфигурации
 
 ---
@@ -108,7 +108,7 @@ scale/
    - Можно безопасно экспериментировать
 
 2. **Изменения в dashboard:**
-   - Сохраняются только в `feature_selection_config_relative.json`
+   - Сохраняются только в `scale/cfg/feature_selection_config_relative.json`
    - Можно вернуться к исходной конфигурации
 
 3. **Резервные копии:**
@@ -146,7 +146,7 @@ streamlit run scale/dashboard.py
 # 3. В dashboard:
 #    - Выбрать/снять признаки через чекбоксы
 #    - Нажать "Сохранить конфигурацию"
-#    - Изменения сохраняются в feature_selection_config_relative.json
+#    - Изменения сохраняются в scale/cfg/feature_selection_config_relative.json
 #    - Исходный эксперимент НЕ изменяется
 
 # 4. Вернуться к исходной конфигурации:
@@ -176,7 +176,7 @@ python3 -m scale.feature_selection_versioning_cli export feature_selection_no_pa
 
 ### Q: Изменятся ли исходные эксперименты при работе в dashboard?
 
-**A:** Нет! Исходные эксперименты (`experiments/*/best_features_*.json`) **НЕ изменяются**. Изменения сохраняются только в `feature_selection_config_relative.json`.
+**A:** Нет! Исходные эксперименты (`experiments/*/best_features_*.json`) **НЕ изменяются**. Изменения сохраняются только в `scale/cfg/feature_selection_config_relative.json`.
 
 ### Q: Можно ли вернуться к исходной конфигурации эксперимента?
 
@@ -187,7 +187,7 @@ python3 -m scale.feature_selection_versioning_cli export feature_selection_no_pa
 ### Q: Что происходит при сохранении конфигурации в dashboard?
 
 **A:** 
-- Изменения сохраняются в `feature_selection_config_relative.json`
+- Изменения сохраняются в `scale/cfg/feature_selection_config_relative.json`
 - Сохраняется информация об исходном эксперименте
 - Исходный эксперимент НЕ изменяется
 
@@ -222,7 +222,7 @@ python3 -m scale.feature_selection_versioning_cli export feature_selection_no_pa
 
 ✅ **Исходные эксперименты защищены** - они не изменяются при работе в dashboard
 
-✅ **Изменения сохраняются отдельно** - только в `feature_selection_config_relative.json`
+✅ **Изменения сохраняются отдельно** - только в `scale/cfg/feature_selection_config_relative.json`
 
 ✅ **Можно вернуться к исходной конфигурации** - через восстановление или повторный экспорт
 

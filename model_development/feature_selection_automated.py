@@ -635,6 +635,8 @@ def run_feature_selection_analysis(
     predictions_dir: Union[str, Path],
     output_dir: Optional[Union[str, Path]] = None,
     methods: Optional[List[str]] = None,
+    train_set: Optional[str] = None,
+    aggregation_version: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Запускает полный анализ подбора признаков.
@@ -695,6 +697,8 @@ def run_feature_selection_analysis(
             df_aggregated=df,  # Агрегированные данные (абсолютные признаки)
             df_features=df_features,  # Относительные признаки
             df_all_features=df_all,  # Все доступные признаки
+            train_set=train_set or str(predictions_dir),  # Train set для трекера
+            aggregation_version=aggregation_version or "current",  # Версия агрегации
         )
         
         print("\n" + "="*60)

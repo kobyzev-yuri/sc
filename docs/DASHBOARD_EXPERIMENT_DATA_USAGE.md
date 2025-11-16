@@ -94,7 +94,7 @@ experiments/
     ├── relative_features_*.csv        ← Относительные признаки
     ├── all_features_*.csv             ← Все доступные признаки
     ├── best_features_*.json          ← Конфигурация признаков
-    └── feature_selection_config_relative.json  ← Конфигурация для dashboard
+    └── scale/cfg/feature_selection_config_relative.json  ← Конфигурация для dashboard
 ```
 
 **Dashboard использует:**

@@ -31,7 +31,7 @@ python3 -m scale.feature_selection_automated results/predictions experiments/fea
 После завершения подбора признаков:
 
 **Автоматически создаются файлы:**
-1. **`scale/feature_selection_config_relative.json`** - конфигурация для dashboard
+1. **`scale/cfg/feature_selection_config_relative.json`** - конфигурация для dashboard
    - При следующем запуске dashboard эти признаки будут автоматически загружены
    
 2. **`experiments/feature_selection_*/medical_report_*.md`** - отчет для медиков
@@ -226,7 +226,7 @@ diff experiments/feature_selection_1/results.csv \
 ### Q: Что делать, если dashboard не загружает признаки?
 
 **A:** Проверьте:
-1. Существует ли файл `scale/feature_selection_config_relative.json`
+1. Существует ли файл `scale/cfg/feature_selection_config_relative.json`
 2. Правильный ли формат JSON
 3. Есть ли выбранные признаки в данных
 

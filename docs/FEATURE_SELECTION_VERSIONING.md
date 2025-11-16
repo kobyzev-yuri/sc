@@ -186,7 +186,7 @@ ls -lt scale/feature_selection_config_relative_backup_*.json
 
 # Восстановить (вручную)
 cp scale/feature_selection_config_relative_backup_TIMESTAMP.json \
-   scale/feature_selection_config_relative.json
+   scale/cfg/feature_selection_config_relative.json
 ```
 
 ---
@@ -245,7 +245,7 @@ ls -lt scale/feature_selection_config_relative_backup_*.json | head -1
 
 # Восстановить
 cp scale/feature_selection_config_relative_backup_TIMESTAMP.json \
-   scale/feature_selection_config_relative.json
+   scale/cfg/feature_selection_config_relative.json
 ```
 
 ### Q: Как удалить старые эксперименты?

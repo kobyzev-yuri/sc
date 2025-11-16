@@ -9,7 +9,7 @@
 - ✅ `best_features_*.json` - лучший набор признаков с метриками
 - ✅ `feature_selection_results_*.csv` - таблица сравнения методов
 - ✅ `medical_report_*.md` - медицинский отчет
-- ✅ `feature_selection_config_relative.json` - конфигурация для dashboard
+- ✅ `scale/cfg/feature_selection_config_relative.json` - конфигурация для dashboard
 
 ### 2. Агрегированные данные (НОВОЕ!)
 
@@ -35,7 +35,7 @@ experiments/
     ├── best_features_*.json              ← Конфигурация лучшего метода
     ├── feature_selection_results_*.csv   ← Сравнение методов
     ├── medical_report_*.md               ← Медицинский отчет
-    ├── feature_selection_config_relative.json  ← Конфигурация для dashboard
+    ├── scale/cfg/feature_selection_config_relative.json  ← Конфигурация для dashboard
     │
     ├── aggregated_data_*.csv             ← Агрегированные данные (НОВОЕ!)
     ├── relative_features_*.csv          ← Относительные признаки (НОВОЕ!)

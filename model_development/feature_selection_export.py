@@ -239,7 +239,7 @@ def create_medical_report(
         "### В dashboard:",
         "",
         "1. Конфигурация признаков автоматически сохранена в файл:",
-        f"   - `scale/feature_selection_config_relative.json` (для относительных признаков)",
+        f"   - `scale/cfg/feature_selection_config_relative.json` (для относительных признаков)",
         "",
         "2. При следующем запуске dashboard эти признаки будут автоматически загружены",
         "",
@@ -460,6 +460,21 @@ def export_to_experiment_format(
     print(f"✓ Метаданные сохранены: {metadata_path}")
     
     print(f"\n✅ Эксперимент сохранен в формате experiments: {output_dir}")
+    
+    # Регистрируем эксперимент в трекере
+    try:
+        from model_development.experiment_tracker import ExperimentTracker, register_experiment_from_directory
+        
+        tracker = ExperimentTracker()
+        exp_id = register_experiment_from_directory(
+            experiment_dir=output_dir,
+            tracker=tracker,
+            train_set=metadata.get("train_set") if metadata else None,
+            aggregation_version=metadata.get("aggregation_version") if metadata else None,
+        )
+        print(f"✓ Эксперимент зарегистрирован в трекере (ID: {exp_id})")
+    except Exception as e:
+        print(f"⚠️ Не удалось зарегистрировать эксперимент в трекере: {e}")
     
     return output_dir
 

@@ -23,20 +23,58 @@ if str(project_root) not in sys.path:
 from model_development import feature_selection_versioning
 
 
-def list_available_experiments(experiments_dir: Path = Path("experiments")) -> List[Dict]:
+def list_available_experiments(experiments_dir: Path = Path("experiments"), use_tracker: bool = True) -> List[Dict]:
     """
     Возвращает список доступных экспериментов.
     
+    Использует ExperimentTracker для получения отсортированного списка лучших экспериментов.
+    Если трекер недоступен или пуст, использует fallback на сканирование директорий.
+    
     Args:
         experiments_dir: Базовая директория с экспериментами
+        use_tracker: Использовать ExperimentTracker (по умолчанию True)
         
     Returns:
-        Список словарей с информацией об экспериментах
+        Список словарей с информацией об экспериментах, отсортированный по score (лучшие первые)
     """
     experiments = []
     experiments_dir = Path(experiments_dir)
     
-    # Ищем все директории с best_features_*.json
+    # Пробуем использовать трекер экспериментов
+    if use_tracker:
+        try:
+            from model_development.experiment_tracker import ExperimentTracker
+            
+            tracker = ExperimentTracker(experiments_dir)
+            df_experiments = tracker.list_experiments(sort_by="score", limit=None)
+            
+            if len(df_experiments) > 0:
+                # Преобразуем DataFrame в список словарей
+                for _, row in df_experiments.iterrows():
+                    # Загружаем детали эксперимента для получения признаков
+                    exp_details = tracker.get_experiment_details(row['id'])
+                    if exp_details:
+                        experiments.append({
+                            'name': row['name'],
+                            'path': str(experiments_dir / row['directory']),
+                            'method': row['method'],
+                            'score': float(row['score']),
+                            'separation': float(row['separation']),
+                            'mod_norm': float(row['mod_norm']),
+                            'n_features': int(row['n_features']),
+                            'features': exp_details.get('parameters', {}).get('selected_features', []),
+                            'timestamp': row['timestamp'],
+                            'train_set': row.get('train_set', 'unknown'),
+                            'aggregation_version': row.get('aggregation_version', 'unknown'),
+                        })
+                
+                # Трекер уже отсортировал по score, возвращаем как есть
+                return experiments
+        except Exception as e:
+            # Если трекер недоступен, используем fallback
+            pass
+    
+    # Fallback: сканируем директории напрямую
     for exp_dir in experiments_dir.rglob("*"):
         if not exp_dir.is_dir():
             continue
@@ -60,6 +98,8 @@ def list_available_experiments(experiments_dir: Path = Path("experiments")) -> L
                     'n_features': len(config.get('selected_features', [])),
                     'features': config.get('selected_features', []),
                     'timestamp': config.get('timestamp', ''),
+                    'train_set': 'unknown',
+                    'aggregation_version': 'unknown',
                 })
             except Exception:
                 continue
@@ -132,7 +172,10 @@ def save_user_config(
         True если успешно сохранено
     """
     if config_file is None:
-        config_file = Path(__file__).parent / (
+        # Конфигурационные файлы хранятся в scale/cfg для разделения с кодом
+        cfg_dir = Path(__file__).parent / "cfg"
+        cfg_dir.mkdir(exist_ok=True)  # Создаем директорию, если её нет
+        config_file = cfg_dir / (
             "feature_selection_config_relative.json" if use_relative_features 
             else "feature_selection_config_absolute.json"
         )
@@ -210,7 +253,10 @@ def restore_experiment_config(
         return False
     
     if config_file is None:
-        config_file = Path(__file__).parent / (
+        # Конфигурационные файлы хранятся в scale/cfg для разделения с кодом
+        cfg_dir = Path(__file__).parent / "cfg"
+        cfg_dir.mkdir(exist_ok=True)  # Создаем директорию, если её нет
+        config_file = cfg_dir / (
             "feature_selection_config_relative.json" if use_relative_features 
             else "feature_selection_config_absolute.json"
         )

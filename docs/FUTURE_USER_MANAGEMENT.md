@@ -34,13 +34,13 @@ experiments/
 ```
 configs/
 ├── user_doctor_smith/
-│   ├── feature_selection_config_relative.json
+│   ├── cfg/feature_selection_config_relative.json
 │   └── feature_selection_config_absolute.json
 ├── user_doctor_jones/
-│   ├── feature_selection_config_relative.json
+│   ├── cfg/feature_selection_config_relative.json
 │   └── feature_selection_config_absolute.json
 └── default/
-    └── feature_selection_config_relative.json
+    └── cfg/feature_selection_config_relative.json
 ```
 
 ### Персональные данные:
@@ -98,7 +98,7 @@ user_data/
    - Полный контроль над данными
 
 2. **Сохранение конфигураций:**
-   - Сохранение в `feature_selection_config_relative.json`
+   - Сохранение в `cfg/feature_selection_config_relative.json`
    - Автоматическая загрузка при следующем запуске
    - Резервные копии при экспорте
 
@@ -161,7 +161,7 @@ user_data/
    if "user" not in st.session_state:
        st.session_state.user = login_user()
    
-   user_config_path = f"configs/{st.session_state.user}/feature_selection_config_relative.json"
+   user_config_path = f"configs/{st.session_state.user}/cfg/feature_selection_config_relative.json"
    ```
 
 3. **Обновить пути:**

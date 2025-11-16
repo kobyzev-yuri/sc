@@ -92,7 +92,7 @@ ls -lt scale/feature_selection_config_relative_backup_*.json | head -1
 
 # Восстановить (замените TIMESTAMP на реальную дату)
 cp scale/feature_selection_config_relative_backup_TIMESTAMP.json \
-   scale/feature_selection_config_relative.json
+   scale/cfg/feature_selection_config_relative.json
 ```
 
 ---

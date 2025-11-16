@@ -24,7 +24,7 @@
 **Как это работает:**
 - Исходные эксперименты хранятся в `experiments/*/best_features_*.json`
 - Эти файлы **НИКОГДА не изменяются** при работе в dashboard
-- Изменения сохраняются только в `scale/feature_selection_config_relative.json`
+- Изменения сохраняются только в `scale/cfg/feature_selection_config_relative.json`
 - Dashboard отслеживает источник и сохраняет метаданные
 
 ### ✅ Q: Как правильно работать в dashboard, чтобы не испортить ничего?
@@ -43,7 +43,7 @@ python3 -m scale.feature_selection_versioning_cli export feature_selection_quick
 ```
 
 **Что происходит:**
-- ✅ Признаки копируются в `scale/feature_selection_config_relative.json`
+- ✅ Признаки копируются в `scale/cfg/feature_selection_config_relative.json`
 - ✅ Создается резервная копия предыдущей конфигурации
 - ✅ Исходный эксперимент (`experiments/feature_selection_quick/best_features_*.json`) **НЕ изменяется**
 
@@ -67,7 +67,7 @@ streamlit run scale/dashboard.py
 - ✅ Исходный эксперимент остается нетронутым
 
 **Что происходит при сохранении:**
-- ✅ Изменения сохраняются в `scale/feature_selection_config_relative.json`
+- ✅ Изменения сохраняются в `scale/cfg/feature_selection_config_relative.json`
 - ✅ Сохраняется информация об исходном эксперименте
 - ✅ Добавляется флаг `user_modified: true`
 - ✅ Исходный эксперимент (`experiments/*/best_features_*.json`) **НЕ изменяется**
@@ -86,7 +86,7 @@ ls -lt scale/feature_selection_config_relative_backup_*.json | head -1
 
 # Восстановить
 cp scale/feature_selection_config_relative_backup_TIMESTAMP.json \
-   scale/feature_selection_config_relative.json
+   scale/cfg/feature_selection_config_relative.json
 ```
 
 ---

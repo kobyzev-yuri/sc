@@ -166,6 +166,22 @@ def save_experiment(
     metadata_path = exp_dir / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
+    
+    # Регистрируем эксперимент в трекере для отслеживания лучших результатов
+    try:
+        from model_development.experiment_tracker import ExperimentTracker, register_experiment_from_directory
+        
+        tracker = ExperimentTracker()
+        exp_id = register_experiment_from_directory(
+            experiment_dir=exp_dir,
+            tracker=tracker,
+            train_set=metadata.get("train_set", "results/predictions"),
+            aggregation_version=metadata.get("aggregation_version", "current"),
+        )
+        st.success(f"✓ Эксперимент зарегистрирован в трекере (ID: {exp_id})")
+    except Exception as e:
+        # Не критично, если трекер недоступен
+        pass
 
 
 def render_dashboard():
@@ -259,12 +275,15 @@ def render_dashboard():
             except ImportError:
                 from . import dashboard_experiment_selector
             
-            # Получаем список доступных экспериментов
-            experiments = dashboard_experiment_selector.list_available_experiments()
+            # Получаем список доступных экспериментов (лучшие вверху через трекер)
+            experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True)
             
             if len(experiments) > 0:
-                # Создаем список для выбора
+                # Создаем список для выбора с более подробной информацией
+                # Лучшие эксперименты уже отсортированы и будут вверху списка
                 experiment_options = [
+                    f"🏆 {exp['name']} (score={exp['score']:.4f}, sep={exp['separation']:.4f}, method={exp['method']})"
+                    if exp.get('score', 0) > 0.8 else  # Выделяем лучшие эксперименты
                     f"{exp['name']} (score={exp['score']:.4f}, method={exp['method']})"
                     for exp in experiments
                 ]
@@ -273,11 +292,11 @@ def render_dashboard():
                     "Выберите эксперимент",
                     experiment_options,
                     index=0,
-                    help="Выберите эксперимент для загрузки сохраненных данных"
+                    help="Выберите эксперимент для загрузки сохраненных данных. Лучшие эксперименты отображаются вверху списка."
                 )
                 
-                # Извлекаем имя эксперимента
-                experiment_name = selected_exp_label.split(" (")[0]
+                # Извлекаем имя эксперимента (убираем эмодзи 🏆 если есть)
+                experiment_name = selected_exp_label.split(" (")[0].replace("🏆 ", "")
                 
                 # Проверяем, изменился ли эксперимент
                 previous_experiment = st.session_state.get("experiment_name", None)
@@ -1080,8 +1099,11 @@ def render_dashboard():
                 
                 # Путь к конфигурационному файлу
                 # Определяем файл конфигурации в зависимости от типа признаков
-                config_file_relative = Path(__file__).parent / "feature_selection_config_relative.json"
-                config_file_absolute = Path(__file__).parent / "feature_selection_config_absolute.json"
+                # Конфигурационные файлы хранятся в scale/cfg для разделения с кодом
+                cfg_dir = Path(__file__).parent / "cfg"
+                cfg_dir.mkdir(exist_ok=True)  # Создаем директорию, если её нет
+                config_file_relative = cfg_dir / "feature_selection_config_relative.json"
+                config_file_absolute = cfg_dir / "feature_selection_config_absolute.json"
                 config_file = config_file_relative if use_relative_features else config_file_absolute
                 
                 # Вспомогательная функция для получения признаков по умолчанию (определяем ДО использования)

@@ -36,7 +36,7 @@ Dashboard предоставляет медикам-экспериментато
 
 2. **Сохранить конфигурацию:**
    - Нажать кнопку "Сохранить конфигурацию"
-   - Конфигурация сохранится в `feature_selection_config_relative.json`
+   - Конфигурация сохранится в `scale/cfg/feature_selection_config_relative.json`
    - Можно использовать при следующем запуске
 
 3. **Безопасность:**
@@ -110,7 +110,8 @@ my_experiment/
 
 ```
 scale/
-├── feature_selection_config_relative.json  ← Текущая конфигурация
+├── cfg/
+│   └── scale/cfg/feature_selection_config_relative.json  ← Текущая конфигурация
 └── feature_selection_config_relative_backup_*.json  ← Резервные копии
 ```
 
@@ -137,9 +138,9 @@ scale/
    ```
    configs/
    ├── user_doctor_smith/
-   │   └── feature_selection_config_relative.json
+   │   └── scale/cfg/feature_selection_config_relative.json
    ├── user_doctor_jones/
-   │   └── feature_selection_config_relative.json
+   │   └── scale/cfg/feature_selection_config_relative.json
    └── ...
    ```
 
@@ -176,7 +177,7 @@ scale/
    - Можно безопасно экспериментировать
 
 2. **Изменения сохраняются отдельно:**
-   - Только в `feature_selection_config_relative.json`
+   - Только в `scale/cfg/feature_selection_config_relative.json`
    - Можно вернуться к исходной конфигурации
 
 3. **Резервные копии:**
@@ -248,7 +249,7 @@ streamlit run scale/dashboard.py
 
 ### Q: Сохраняются ли мои конфигурации?
 
-**A:** Да! Конфигурации сохраняются в `feature_selection_config_relative.json` и загружаются автоматически при следующем запуске.
+**A:** Да! Конфигурации сохраняются в `scale/cfg/feature_selection_config_relative.json` и загружаются автоматически при следующем запуске.
 
 ### Q: Могу ли я изменить конфигурацию из эксперимента?
 
