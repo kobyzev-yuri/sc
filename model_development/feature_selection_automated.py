@@ -546,6 +546,7 @@ class FeatureSelector:
         self,
         candidate_features: List[str],
         methods: Optional[List[str]] = None,
+        method_params: Optional[Dict[str, Dict]] = None,
     ) -> pd.DataFrame:
         """
         Сравнивает все методы отбора признаков.
@@ -553,6 +554,7 @@ class FeatureSelector:
         Args:
             candidate_features: Список кандидатных признаков
             methods: Список методов для сравнения (None = все методы)
+            method_params: Словарь с параметрами для методов {method_name: {param: value}}
             
         Returns:
             DataFrame с результатами сравнения
@@ -567,6 +569,9 @@ class FeatureSelector:
                 'rfe',
             ]
         
+        if method_params is None:
+            method_params = {}
+        
         results = []
         
         for method_name in methods:
@@ -575,18 +580,38 @@ class FeatureSelector:
             print(f"{'='*60}")
             
             try:
+                params = method_params.get(method_name, {})
+                
                 if method_name == 'forward':
-                    features, metrics = self.method_1_forward_selection(candidate_features)
+                    features, metrics = self.method_1_forward_selection(
+                        candidate_features,
+                        min_improvement=params.get('min_improvement', 0.01)
+                    )
                 elif method_name == 'backward':
-                    features, metrics = self.method_2_backward_elimination(candidate_features)
+                    features, metrics = self.method_2_backward_elimination(
+                        candidate_features,
+                        min_improvement=params.get('min_improvement', 0.01)
+                    )
                 elif method_name == 'positive_loadings':
-                    features, metrics = self.method_3_positive_loadings_filter(candidate_features)
+                    features, metrics = self.method_3_positive_loadings_filter(
+                        candidate_features,
+                        min_loading=params.get('min_loading', 0.05)
+                    )
                 elif method_name == 'mutual_information':
-                    features, metrics = self.method_4_mutual_information(candidate_features)
+                    features, metrics = self.method_4_mutual_information(
+                        candidate_features,
+                        k=params.get('k', None)
+                    )
                 elif method_name == 'lasso':
-                    features, metrics = self.method_5_lasso_selection(candidate_features)
+                    features, metrics = self.method_5_lasso_selection(
+                        candidate_features,
+                        cv=params.get('cv', 5)
+                    )
                 elif method_name == 'rfe':
-                    features, metrics = self.method_6_rfe_selection(candidate_features)
+                    features, metrics = self.method_6_rfe_selection(
+                        candidate_features,
+                        n_features=params.get('n_features', None)
+                    )
                 else:
                     continue
                 
