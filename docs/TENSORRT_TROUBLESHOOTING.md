@@ -77,3 +77,5 @@ model_configs = create_model_configs(use_tensorrt=True, tensorrt_fallback=True)
 
 **Не беспокойтесь если TensorRT не устанавливается!** Система полностью функциональна с PyTorch моделями. TensorRT - это дополнительная оптимизация, а не требование.
 
+
+

@@ -155,3 +155,5 @@ print(f"Объясненная дисперсия: {pca_all.pca.explained_varian
 - Анализ признаков: `python test/analyze_feature_selection.py`
 - Тест положительных loadings: `python test/test_positive_loadings_features.py`
 
+
+
