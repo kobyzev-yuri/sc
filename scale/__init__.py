@@ -18,8 +18,10 @@ from . import cluster_comparison
 from . import method_comparison
 from . import preprocessing
 from . import eda
-from . import dashboard
 from . import scale_comparison
+
+# dashboard не импортируется здесь, чтобы избежать циклических импортов
+# Используйте: from scale import dashboard напрямую
 
 __all__ = [
     "aggregate",
@@ -31,7 +33,6 @@ __all__ = [
     "method_comparison",
     "preprocessing",
     "eda",
-    "dashboard",
     "scale_comparison",
 ]
 
