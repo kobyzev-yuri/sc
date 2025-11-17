@@ -1,0 +1,51 @@
+# Конфигурация для Google App Engine (Flexible Environment)
+# Альтернативный вариант развертывания
+
+runtime: python
+env: flex
+
+# Python версия
+runtime_config:
+  python_version: 3.9
+
+# Ресурсы
+resources:
+  cpu: 1
+  memory_gb: 2
+  disk_size_gb: 10
+
+# Переменные окружения
+env_variables:
+  STREAMLIT_SERVER_PORT: '8080'
+  STREAMLIT_SERVER_ADDRESS: '0.0.0.0'
+  STREAMLIT_SERVER_HEADLESS: 'true'
+  STREAMLIT_BROWSER_GATHER_USAGE_STATS: 'false'
+
+# Автоматическое масштабирование
+automatic_scaling:
+  min_num_instances: 1
+  max_num_instances: 2
+
+# Health check
+readiness_check:
+  path: "/_stcore/health"
+  check_interval_sec: 5
+  timeout_sec: 4
+  failure_threshold: 2
+  success_threshold: 2
+
+liveness_check:
+  path: "/_stcore/health"
+  check_interval_sec: 30
+  timeout_sec: 4
+  failure_threshold: 4
+  success_threshold: 2
+
+# Обработчики
+handlers:
+  - url: /.*
+    script: auto
+
+# Примечание: Для App Engine Flexible нужно создать entrypoint скрипт
+# См. инструкции в DEPLOYMENT_GCP.md
+

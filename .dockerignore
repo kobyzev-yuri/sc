@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Документация и временные файлы
+*.md
+!README.md
+docs/
+archive/
+
+# Данные и результаты (не копируем большие файлы)
+experiments/
+results/visualization/
+*.log
+*.pkl
+*.pt
+*.onnx
+*.engine
+
+# Модели (если они большие, лучше хранить в Cloud Storage)
+# Раскомментируйте, если модели слишком большие
+# models/
+
+# Тесты
+test/
+tests/
+*.test.py
+
+# Jupyter notebooks
+*.ipynb
+notebook/
+colab/
+
+# Google Cloud
+.gcloudignore
+app.yaml
+cloudbuild.yaml
+
+# Другие
+.DS_Store
+*.tmp
+*.bak
+

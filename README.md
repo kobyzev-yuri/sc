@@ -718,6 +718,29 @@ experiments/my_experiment/
 - Визуализация сравнения (6 графиков)
 - Рекомендация лучшего метода по критериям
 
+## Развертывание в Google Cloud Platform
+
+Для развертывания дашборда в Google Cloud Platform:
+
+### Быстрый старт
+
+```bash
+# 1. Установите Google Cloud SDK
+curl https://sdk.cloud.google.com | bash
+
+# 2. Войдите и настройте проект
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# 3. Разверните приложение
+cd /mnt/ai/cnn/sc
+./deploy_gcp.sh
+```
+
+Подробные инструкции:
+- **[РАЗВЕРТЫВАНИЕ_GCP.md](РАЗВЕРТЫВАНИЕ_GCP.md)** - краткая инструкция на русском
+- **[DEPLOYMENT_GCP.md](DEPLOYMENT_GCP.md)** - подробная документация
+
 ## Следующие шаги
 
 1. ✅ Подготовить CSV таблицу с данными - использовать `aggregate.py`
@@ -725,7 +748,8 @@ experiments/my_experiment/
 3. ✅ Реализовать кластеризацию (HDBSCAN) - использовать `clustering.py`
 4. ✅ Построить шкалу оценки патологии - использовать `cluster_scoring.py`
 5. ✅ Создать интерпретируемый дашборд - использовать `dashboard.py`
-6. ❌ Интеграция всех модулей в единый pipeline (`analyze.py`)
-7. ❌ Unit и интеграционные тесты
-8. ❌ Опционально: Anomaly Detection и Supervised Regression методы
+6. ✅ Развертывание в Google Cloud Platform
+7. ❌ Интеграция всех модулей в единый pipeline (`analyze.py`)
+8. ❌ Unit и интеграционные тесты
+9. ❌ Опционально: Anomaly Detection и Supervised Regression методы
 
