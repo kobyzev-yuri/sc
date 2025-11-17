@@ -23,7 +23,7 @@ if str(project_root) not in sys.path:
 from model_development import feature_selection_versioning
 
 
-def list_available_experiments(experiments_dir: Path = Path("experiments"), use_tracker: bool = True, top_n: Optional[int] = None) -> List[Dict]:
+def list_available_experiments(experiments_dir: Path = Path("experiments"), use_tracker: bool = True, top_n: Optional[int] = None, check_data: bool = False) -> List[Dict]:
     """
     Возвращает список доступных экспериментов.
     
@@ -34,6 +34,7 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
         experiments_dir: Базовая директория с экспериментами
         use_tracker: Использовать ExperimentTracker (по умолчанию True)
         top_n: Максимальное число экспериментов для возврата (None = все, по умолчанию 3 для dashboard)
+        check_data: Проверять наличие данных в эксперименте (aggregated_data, relative_features, all_features)
         
     Returns:
         Список словарей с информацией об экспериментах, отсортированный по score (лучшие первые)
@@ -47,17 +48,40 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
             from model_development.experiment_tracker import ExperimentTracker
             
             tracker = ExperimentTracker(experiments_dir)
-            df_experiments = tracker.list_experiments(sort_by="score", limit=top_n)
+            # Получаем больше экспериментов, если нужна проверка данных (потом отфильтруем)
+            limit = (top_n * 3) if (check_data and top_n) else top_n
+            df_experiments = tracker.list_experiments(sort_by="score", limit=limit)
             
             if len(df_experiments) > 0:
                 # Преобразуем DataFrame в список словарей
                 for _, row in df_experiments.iterrows():
+                    # Путь к эксперименту может быть относительным от experiments_dir или абсолютным
+                    directory_str = row['directory']
+                    if Path(directory_str).is_absolute():
+                        exp_dir = Path(directory_str)
+                    else:
+                        # Если путь начинается с "experiments/", убираем префикс
+                        if directory_str.startswith("experiments/"):
+                            exp_dir = Path(directory_str)
+                        else:
+                            exp_dir = experiments_dir / directory_str
+                    
+                    # Проверяем наличие данных, если требуется
+                    if check_data:
+                        aggregated_files = list(exp_dir.glob("aggregated_data_*.csv"))
+                        relative_files = list(exp_dir.glob("relative_features_*.csv"))
+                        all_features_files = list(exp_dir.glob("all_features_*.csv"))
+                        
+                        # Пропускаем эксперименты без данных
+                        if not (aggregated_files or relative_files or all_features_files):
+                            continue
+                    
                     # Загружаем детали эксперимента для получения признаков
                     exp_details = tracker.get_experiment_details(row['id'])
                     if exp_details:
                         experiments.append({
                             'name': row['name'],
-                            'path': str(experiments_dir / row['directory']),
+                            'path': str(exp_dir),
                             'method': row['method'],
                             'score': float(row['score']),
                             'separation': float(row['separation']),
@@ -68,8 +92,12 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
                             'train_set': row.get('train_set', 'unknown'),
                             'aggregation_version': row.get('aggregation_version', 'unknown'),
                         })
+                    
+                    # Останавливаемся, если набрали нужное количество
+                    if top_n and len(experiments) >= top_n:
+                        break
                 
-                # Трекер уже отсортировал по score, возвращаем как есть (уже ограничено top_n)
+                # Возвращаем отфильтрованные эксперименты
                 return experiments
         except Exception as e:
             # Если трекер недоступен, используем fallback
@@ -80,8 +108,22 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
         if not exp_dir.is_dir():
             continue
         
+        # Пропускаем архивные директории
+        if "archive" in str(exp_dir).lower():
+            continue
+        
         json_files = list(exp_dir.glob("best_features_*.json"))
         if json_files:
+            # Проверяем наличие данных, если требуется
+            if check_data:
+                aggregated_files = list(exp_dir.glob("aggregated_data_*.csv"))
+                relative_files = list(exp_dir.glob("relative_features_*.csv"))
+                all_features_files = list(exp_dir.glob("all_features_*.csv"))
+                
+                # Пропускаем эксперименты без данных
+                if not (aggregated_files or relative_files or all_features_files):
+                    continue
+            
             # Берем последний файл
             best_file = sorted(json_files)[-1]
             

@@ -275,8 +275,8 @@ def render_dashboard():
             except ImportError:
                 from . import dashboard_experiment_selector
             
-            # Получаем список доступных экспериментов (лучшие вверху через трекер)
-            experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True)
+            # Получаем список доступных экспериментов (только топ-3 с лучшим score и с данными)
+            experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True, top_n=3, check_data=True)
             
             if len(experiments) > 0:
                 # Создаем список для выбора с более подробной информацией
@@ -497,9 +497,9 @@ def render_dashboard():
         
         # Выбор директории для инференса
         inference_default_dirs = [
+            "test/predictions",
             "results/inference",
             "results/predictions",
-            "test/predictions",
         ]
         
         # Поиск существующих директорий
@@ -1504,6 +1504,10 @@ def render_dashboard():
                             for key in cache_keys_to_remove:
                                 del st.session_state[key]
                             
+                            # Очищаем старые метрики, чтобы они пересчитались с новыми признаками
+                            if "current_metrics" in st.session_state:
+                                del st.session_state.current_metrics
+                            
                             # Сохраняем в конфигурационный файл
                             if save_feature_config(selected_features_list):
                                 st.success("✅ Конфигурация сохранена в файл")
@@ -2068,9 +2072,18 @@ def render_dashboard():
                     available_cols = [col for col in cols_to_keep if col in df_features.columns]
                     df_features = df_features[available_cols]
                 
-                # Вычисляем метрики для текущего набора признаков (если не используется эксперимент)
-                # Метрики вычисляются только для пользовательских данных, не для экспериментов
-                if not use_experiment_data and len(current_selected) > 0 and "image" in df_features.columns:
+                # Вычисляем метрики для текущего набора признаков
+                # Метрики пересчитываются при изменении признаков (даже если используется эксперимент)
+                should_recalculate_metrics = (
+                    len(current_selected) > 0 and 
+                    "image" in df_features.columns and
+                    (
+                        not use_experiment_data or  # Не используется эксперимент
+                        (use_experiment_data and "features_applied" in st.session_state and st.session_state.features_applied)  # Или признаки были изменены
+                    )
+                )
+                
+                if should_recalculate_metrics:
                     # Определяем mod и normal образцы из имен файлов
                     mod_samples = []
                     normal_samples = []
@@ -2101,7 +2114,17 @@ def render_dashboard():
                                     # Сохраняем метрики в session_state для использования при сохранении эксперимента
                                     st.session_state.current_metrics = current_metrics
                                     
-                                    with st.expander("📊 Метрики качества текущего набора признаков", expanded=False):
+                                    # Сбрасываем флаг features_applied после пересчета метрик
+                                    if "features_applied" in st.session_state:
+                                        del st.session_state.features_applied
+                                    
+                                    # Определяем заголовок в зависимости от того, используется ли эксперимент
+                                    if use_experiment_data:
+                                        expander_title = "📊 Метрики качества текущего набора признаков (после изменений)"
+                                    else:
+                                        expander_title = "📊 Метрики качества текущего набора признаков"
+                                    
+                                    with st.expander(expander_title, expanded=True):
                                         score_val = current_metrics.get('score', 0)
                                         separation_val = current_metrics.get('separation', 0)
                                         mean_pc1_norm_mod_val = current_metrics.get('mean_pc1_norm_mod', 0)
