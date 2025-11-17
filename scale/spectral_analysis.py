@@ -4,11 +4,15 @@
 Модуль для выявления стабильных состояний (мод) в распределении патологий
 и построения спектральной шкалы оценки от 0 до 1.
 
+📌 НАЗВАНИЕ МЕТОДА: 
+   "Non-parametric Density Estimation with Peak Detection"
+   (Непараметрическая оценка плотности с обнаружением пиков)
+
 Методы:
 - PCA: снижение размерности через главные компоненты
-- KDE: оценка плотности распределения для поиска мод
+- KDE (Kernel Density Estimation): оценка плотности распределения через гауссовы ядра
+- Peak Detection (find_peaks): алгоритм обнаружения локальных максимумов (мод)
 - GMM: моделирование смеси распределений для выявления состояний
-- HDBSCAN: кластеризация для валидации мод
 """
 
 from pathlib import Path
@@ -29,7 +33,7 @@ class SpectralAnalyzer:
     Класс для спектрального анализа патологий и создания универсальной шкалы.
     
     Выявляет стабильные состояния (моды) в распределении патологий через
-    комбинацию PCA, KDE, GMM и кластеризации.
+    комбинацию PCA, KDE и GMM.
     """
 
     def __init__(self):
@@ -922,6 +926,23 @@ class SpectralAnalyzer:
                        label=f'GMM смесь ({self.gmm.n_components} компонентов)')
         
         ax.hist(pc1_values, bins=30, alpha=0.5, density=True, label="Histogram", color='gray')
+        
+        # Отметка границ интервалов классификации на сырых значениях PC1
+        if self.pc1_p1 is not None and self.pc1_p99 is not None:
+            thresholds_spectrum = [0.2, 0.5, 0.8]
+            threshold_colors = ["green", "orange", "red"]
+            
+            for threshold, color in zip(thresholds_spectrum, threshold_colors):
+                # Преобразуем порог спектральной шкалы в значение PC1
+                pc1_threshold = self.pc1_p1 + threshold * (self.pc1_p99 - self.pc1_p1)
+                ax.axvline(
+                    pc1_threshold,
+                    color=color,
+                    linestyle="-",
+                    linewidth=1.5,
+                    alpha=0.5,
+                )
+        
         ax.set_xlabel("PC1 (сырые значения)", fontsize=11)
         ax.set_ylabel("Плотность", fontsize=11)
         ax.set_title("Спектр распределения (сырые PC1)", fontsize=12, fontweight='bold')
@@ -1027,6 +1048,32 @@ class SpectralAnalyzer:
         density_hist = counts / (len(pc1_spectrum) * bin_width) * scale_factor
         ax.bar(bins[:-1], density_hist, width=bin_width, alpha=0.5, color='gray', label="Histogram")
         
+        # Отметка границ интервалов классификации
+        thresholds = [0.2, 0.5, 0.8]
+        threshold_labels = ["normal/mild", "mild/moderate", "moderate/severe"]
+        threshold_colors = ["green", "orange", "red"]
+        
+        for threshold, label, color in zip(thresholds, threshold_labels, threshold_colors):
+            ax.axvline(
+                threshold,
+                color=color,
+                linestyle="-",
+                linewidth=1.5,
+                alpha=0.6,
+            )
+            # Добавляем текстовую метку над линией
+            y_max = ax.get_ylim()[1]
+            ax.text(
+                threshold,
+                y_max * 0.95,
+                f"{label}\n({threshold})",
+                ha="center",
+                va="top",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7, edgecolor=color),
+                rotation=0,
+            )
+        
         ax.set_xlabel("Спектральная шкала (0-1)", fontsize=11)
         ax.set_ylabel("Плотность (масштабированная)", fontsize=11)
         ax.set_title("Спектр распределения (нормализованная шкала 0-1)", fontsize=12, fontweight='bold')
@@ -1098,6 +1145,32 @@ class SpectralAnalyzer:
         gmm_density_total_norm = gmm_density_total_raw * scale_factor
         ax.plot(x_grid, gmm_density_total_norm, 'k-', linewidth=2, alpha=0.4,
                label='Общая смесь', zorder=1)
+        
+        # Отметка границ интервалов классификации
+        thresholds = [0.2, 0.5, 0.8]
+        threshold_labels = ["normal/mild", "mild/moderate", "moderate/severe"]
+        threshold_colors = ["green", "orange", "red"]
+        
+        for threshold, label, color in zip(thresholds, threshold_labels, threshold_colors):
+            ax.axvline(
+                threshold,
+                color=color,
+                linestyle="-",
+                linewidth=1.5,
+                alpha=0.6,
+            )
+            # Добавляем текстовую метку над линией
+            y_max = ax.get_ylim()[1]
+            ax.text(
+                threshold,
+                y_max * 0.95,
+                f"{label}\n({threshold})",
+                ha="center",
+                va="top",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7, edgecolor=color),
+                rotation=0,
+            )
         
         ax.set_xlabel("Спектральная шкала (0-1)", fontsize=11)
         ax.set_ylabel("Плотность (масштабированная)", fontsize=11)
@@ -1210,6 +1283,22 @@ class SpectralAnalyzer:
             ax1.axvline(
                 self.pc1_p99, color="g", linestyle=":", linewidth=1, label="P99"
             )
+            
+            # Отметка границ интервалов классификации на сырых значениях PC1
+            thresholds_spectrum = [0.2, 0.5, 0.8]
+            threshold_labels = ["normal/mild", "mild/moderate", "moderate/severe"]
+            threshold_colors = ["green", "orange", "red"]
+            
+            for threshold, label, color in zip(thresholds_spectrum, threshold_labels, threshold_colors):
+                # Преобразуем порог спектральной шкалы в значение PC1
+                pc1_threshold = self.pc1_p1 + threshold * (self.pc1_p99 - self.pc1_p1)
+                ax1.axvline(
+                    pc1_threshold,
+                    color=color,
+                    linestyle="-",
+                    linewidth=1.5,
+                    alpha=0.5,
+                )
 
         ax1.hist(pc1_values, bins=30, alpha=0.5, density=True, label="Histogram")
         ax1.set_xlabel("PC1")
@@ -1250,7 +1339,34 @@ class SpectralAnalyzer:
                     linestyle="--",
                     linewidth=2,
                     alpha=0.7,
+                    label="Мода" if mode == self.modes[0] else "",
                 )
+        
+        # Отметка границ интервалов классификации (normal/mild/moderate/severe)
+        thresholds = [0.2, 0.5, 0.8]
+        threshold_labels = ["normal/mild", "mild/moderate", "moderate/severe"]
+        threshold_colors = ["green", "orange", "red"]
+        
+        for threshold, label, color in zip(thresholds, threshold_labels, threshold_colors):
+            ax2.axvline(
+                threshold,
+                color=color,
+                linestyle="-",
+                linewidth=1.5,
+                alpha=0.6,
+                label=label if threshold == thresholds[0] else "",
+            )
+            # Добавляем текстовую метку над линией
+            ax2.text(
+                threshold,
+                ax2.get_ylim()[1] * 0.95,
+                f"{label}\n({threshold})",
+                ha="center",
+                va="top",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7, edgecolor=color),
+                rotation=0,
+            )
 
         ax2.set_xlabel("Спектральная шкала (0-1)")
         ax2.set_ylabel("Frequency")
@@ -1260,35 +1376,7 @@ class SpectralAnalyzer:
             ax2.legend()
         ax2.grid(True, alpha=0.3)
 
-        # Добавляем краткие комментарии ниже графиков
-        gmm_method_text = ""
-        if self.gmm is not None:
-            gmm_method_text = (
-                f"GMM обучен с {self.gmm.n_components} компонентами через EM-алгоритм. "
-                f"Число компонентов выбрано автоматически по BIC критерию. "
-            )
-        
-        comment_text = (
-            "[KDE] (синяя линия): непараметрическая оценка плотности распределения PC1. "
-            "Показывает реальную форму распределения без предположений о модели. "
-            "Пики = области с высокой концентрацией образцов.\n\n"
-            "[Mode] (красные пунктирные линии): стабильные состояния (локальные максимумы плотности). "
-            "Каждая мода = группа образцов с похожими характеристиками. "
-            "Моды помогают выявить основные патологические состояния.\n\n"
-            "[GMM] (фиолетовая линия): параметрическая модель смеси гауссовых распределений. "
-            f"{gmm_method_text}"
-            "Аппроксимирует распределение через несколько компонентов (состояний). "
-            "Центры компонентов отмечены вертикальными линиями. "
-            "RMSE показывает качество аппроксимации KDE. "
-            "Подробнее о методах см. раздел 'Спектральный анализ'."
-        )
-        
-        fig.text(0.5, 0.01, comment_text,
-                ha='center', va='bottom', fontsize=8.5, 
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.3),
-                family='monospace')
-
-        plt.tight_layout(rect=[0, 0.12, 1, 1])  # Оставляем место внизу для текста
+        plt.tight_layout()
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches="tight")
