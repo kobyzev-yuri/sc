@@ -545,6 +545,151 @@ pip install streamlit  # для дашборда
 
 ---
 
+## Поиск оптимальных параметров (model_development)
+
+Директория `model_development/` содержит инструменты для автоматизированного подбора признаков и поиска оптимальных параметров модели.
+
+### Основные возможности
+
+1. **Автоматизированный подбор признаков** (`feature_selection_automated.py`):
+   - 6 методов подбора признаков:
+     - `forward` - Forward Selection (последовательное добавление признаков)
+     - `backward` - Backward Elimination (последовательное удаление признаков)
+     - `positive_loadings` - Фильтрация по положительным loadings PC1
+     - `mutual_information` - Mutual Information (взаимная информация)
+     - `lasso` - Lasso regularization (L1 регуляризация)
+     - `rfe` - Recursive Feature Elimination (рекурсивное удаление признаков)
+   - Комбинированные методы (forward+backward, MI+forward и др.)
+   - Автоматическое сравнение всех методов
+   - Экспорт результатов в формат experiments для dashboard
+
+2. **Поиск оптимальных весов Score** (`analyze_score_weights.py`):
+   - Тестирование различных комбинаций весов в формуле Score:
+     ```
+     Score = w_sep × separation + w_mod × mean_pc1_norm_mod + w_var × explained_variance
+     ```
+   - Grid search по сетке весов (w_sep, w_mod, w_var)
+   - Анализ чувствительности к изменению весов
+   - Определение стабильных признаков при разных весах
+   - Рекомендации оптимальных весов на основе данных
+
+3. **Трекинг экспериментов** (`experiment_tracker.py`):
+   - Сохранение метаданных экспериментов
+   - Версионирование конфигураций признаков
+   - Сравнение результатов разных экспериментов
+   - CLI утилита для управления экспериментами
+
+### Использование
+
+#### Базовый пример подбора признаков
+
+```python
+from model_development.feature_selection_automated import FeatureSelector
+from scale import aggregate
+
+# Загрузка данных
+df = aggregate.load_predictions_batch("results/predictions")
+df_features = aggregate.create_relative_features(df)
+
+# Создание селектора
+selector = FeatureSelector(df_features)
+
+# Подбор признаков методом Forward Selection
+candidate_features = [col for col in df_features.columns 
+                     if col not in ['image', 'sample_type']]
+selected_features, metrics = selector.method_1_forward_selection(
+    candidate_features,
+    max_features=20,
+    min_improvement=0.01
+)
+
+print(f"Выбрано признаков: {len(selected_features)}")
+print(f"Score: {metrics['score']:.4f}")
+print(f"Separation: {metrics['separation']:.4f}")
+```
+
+#### Сравнение всех методов
+
+```python
+# Сравнение всех доступных методов
+results_df = selector.compare_all_methods(
+    candidate_features,
+    methods=['forward', 'backward', 'positive_loadings', 
+             'mutual_information', 'lasso', 'rfe']
+)
+
+# Сортировка по Score
+best_method = results_df.sort_values('score', ascending=False).iloc[0]
+print(f"Лучший метод: {best_method['method']}")
+print(f"Score: {best_method['score']:.4f}")
+```
+
+#### Поиск оптимальных весов Score
+
+```python
+from model_development.analyze_score_weights import analyze_weight_sensitivity
+
+# Анализ чувствительности к весам
+results = analyze_weight_sensitivity(
+    predictions_dir="results/predictions",
+    weight_combinations=[
+        (0.4, 0.3, 0.3),  # Текущие веса
+        (0.5, 0.25, 0.25),  # Больше separation
+        (0.33, 0.33, 0.33),  # Равные веса
+        # ... другие комбинации
+    ]
+)
+
+# Рекомендации оптимальных весов
+print(f"Рекомендуемые веса: {results['recommended_weights']}")
+print(f"Стабильные признаки: {results['stable_features']}")
+```
+
+#### Комплексный запуск экспериментов
+
+```bash
+# Запуск всех методов подбора признаков
+python -m model_development.run_comprehensive_feature_selection \
+    results/predictions \
+    experiments/feature_selection_all_methods
+
+# Анализ оптимальности весов
+python -m model_development.analyze_score_weights \
+    results/predictions \
+    --output experiments/weight_analysis
+```
+
+### Метрики качества
+
+Все методы оцениваются по следующим метрикам:
+
+- **Score** (комплексная оценка): `0.4 × separation + 0.3 × mod_norm + 0.3 × variance`
+- **Separation**: разница между средними PC1 для mod и normal образцов
+- **Mod (норм. PC1)**: позиция патологических образцов на шкале 0-1
+- **Explained variance**: доля дисперсии, объясняемая PC1
+
+**Целевые значения:**
+- Score > 3.0 (хорошо), > 3.5 (отлично)
+- Separation > 6.0 (хорошо), > 7.0 (отлично)
+- Mod (норм. PC1) > 0.70 (хорошо), > 0.85 (отлично)
+- Explained variance > 0.50 (хорошо), > 0.60 (отлично)
+
+### Формат результатов
+
+Результаты сохраняются в директорию `experiments/` в формате, совместимом с dashboard:
+
+```
+experiments/my_experiment/
+├── best_features_YYYYMMDD_HHMMSS.json  # Конфигурация признаков
+├── results.csv                          # Результаты спектрального анализа
+├── spectral_analyzer.pkl                 # Обученная модель
+└── metadata.json                         # Метаданные эксперимента
+```
+
+Подробнее см. [model_development/README.md](model_development/README.md) и [model_development/FEATURE_SELECTION_PLAN.md](model_development/FEATURE_SELECTION_PLAN.md)
+
+---
+
 ## Документация
 
 - **[docs/FEATURES.md](docs/FEATURES.md)** - Подробное описание абсолютных и относительных признаков, их количества и формул
@@ -555,6 +700,7 @@ pip install streamlit  # для дашборда
 - **[docs/ANALYSIS.md](docs/ANALYSIS.md)** - Анализ результатов и известные проблемы
 - **[docs/CLASSIFICATION_CRITERIA.md](docs/CLASSIFICATION_CRITERIA.md)** - Критерии классификации образцов (normal/mild/moderate/severe) и пороги на спектральной шкале
 - **[docs/HOW_TO_RERUN_ANALYSIS.md](docs/HOW_TO_RERUN_ANALYSIS.md)** - Как перезапустить анализ в веб-интерфейсе
+- **[model_development/README.md](model_development/README.md)** - Описание инструментов для подбора признаков и поиска оптимальных параметров
 
 ## Новые возможности
 
