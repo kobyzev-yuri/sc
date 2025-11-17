@@ -275,28 +275,96 @@ def render_dashboard():
             except ImportError:
                 from . import dashboard_experiment_selector
             
-            # Получаем список доступных экспериментов (только топ-3 с лучшим score и с данными)
-            experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True, top_n=3, check_data=True)
+            # Опция показать все эксперименты
+            show_all_experiments = st.checkbox(
+                "Показать все эксперименты",
+                value=st.session_state.get("show_all_experiments", False),
+                key="show_all_experiments",
+                help="Если включено, показываются все эксперименты из директории, а не только топ-3"
+            )
             
-            if len(experiments) > 0:
-                # Создаем список для выбора с более подробной информацией
-                # Лучшие эксперименты уже отсортированы и будут вверху списка
-                experiment_options = [
-                    f"🏆 {exp['name']} (score={exp['score']:.4f}, sep={exp['separation']:.4f}, method={exp['method']})"
-                    if exp.get('score', 0) > 0.8 else  # Выделяем лучшие эксперименты
-                    f"{exp['name']} (score={exp['score']:.4f}, method={exp['method']})"
-                    for exp in experiments
-                ]
+            # Опция ввести имя эксперимента вручную
+            use_custom_experiment = st.checkbox(
+                "Ввести имя эксперимента вручную",
+                value=st.session_state.get("use_custom_experiment", False),
+                key="use_custom_experiment",
+                help="Если включено, можно ввести имя любого эксперимента из директории experiments/"
+            )
+            
+            experiment_name = None
+            
+            # Если включен ручной ввод, показываем текстовое поле
+            if use_custom_experiment:
+                # Показываем список всех доступных директорий для справки
+                all_exp_dirs = sorted([d.name for d in Path("experiments").iterdir() 
+                                     if d.is_dir() and d.name != "archive"])
                 
-                selected_exp_label = st.selectbox(
-                    "Выберите эксперимент",
-                    experiment_options,
-                    index=0,
-                    help="Выберите эксперимент для загрузки сохраненных данных. Лучшие эксперименты отображаются вверху списка."
+                if all_exp_dirs:
+                    st.caption(f"Доступные эксперименты: {', '.join(all_exp_dirs[:10])}{'...' if len(all_exp_dirs) > 10 else ''}")
+                
+                custom_exp_name = st.text_input(
+                    "Имя эксперимента",
+                    value="",
+                    placeholder="например: feature_selection_quick",
+                    help="Введите имя директории эксперимента из experiments/"
                 )
                 
-                # Извлекаем имя эксперимента (убираем эмодзи 🏆 если есть)
-                experiment_name = selected_exp_label.split(" (")[0].replace("🏆 ", "")
+                if custom_exp_name:
+                    experiment_dir = Path("experiments") / custom_exp_name
+                    if experiment_dir.exists() and experiment_dir.is_dir():
+                        experiment_name = custom_exp_name
+                    else:
+                        st.error(f"❌ Эксперимент '{custom_exp_name}' не найден в директории experiments/")
+                        experiment_name = None
+            else:
+                # Получаем список доступных экспериментов
+                if show_all_experiments:
+                    # Показываем все эксперименты (без ограничения top_n, но с проверкой данных)
+                    experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True, top_n=None, check_data=True)
+                    # Если с проверкой данных мало экспериментов, пробуем без проверки
+                    if len(experiments) <= 3:
+                        experiments_all = dashboard_experiment_selector.list_available_experiments(use_tracker=True, top_n=None, check_data=False)
+                        if len(experiments_all) > len(experiments):
+                            st.info(f"💡 Найдено {len(experiments)} экспериментов с данными. Показаны все доступные эксперименты ({len(experiments_all)}).")
+                            experiments = experiments_all
+                else:
+                    # Показываем только топ-3 с лучшим score и с данными
+                    experiments = dashboard_experiment_selector.list_available_experiments(use_tracker=True, top_n=3, check_data=True)
+                
+                if len(experiments) > 0:
+                    # Создаем список для выбора с более подробной информацией
+                    # Лучшие эксперименты уже отсортированы и будут вверху списка
+                    experiment_options = [
+                        f"🏆 {exp['name']} (score={exp['score']:.4f}, sep={exp['separation']:.4f}, method={exp['method']})"
+                        if exp.get('score', 0) > 0.8 else  # Выделяем лучшие эксперименты
+                        f"{exp['name']} (score={exp['score']:.4f}, method={exp['method']})"
+                        for exp in experiments
+                    ]
+                    
+                    # Используем key, который зависит от состояния чекбокса и количества экспериментов
+                    # Это заставит Streamlit пересоздать виджет при изменении
+                    selectbox_key = f"experiment_selectbox_{show_all_experiments}_{len(experiments)}_{hash(tuple(exp['name'] for exp in experiments))}"
+                    
+                    # Показываем информацию о количестве экспериментов
+                    if show_all_experiments:
+                        st.caption(f"📊 Показано {len(experiments)} экспериментов")
+                    
+                    selected_exp_label = st.selectbox(
+                        "Выберите эксперимент",
+                        experiment_options,
+                        index=0,
+                        key=selectbox_key,
+                        help=f"Выберите эксперимент для загрузки сохраненных данных. {'Показаны все эксперименты' if show_all_experiments else 'Показаны топ-3 эксперимента'}."
+                    )
+                    
+                    # Извлекаем имя эксперимента (убираем эмодзи 🏆 если есть)
+                    experiment_name = selected_exp_label.split(" (")[0].replace("🏆 ", "")
+                else:
+                    # Если экспериментов нет, но пользователь хочет показать все, попробуем без проверки данных
+                    if show_all_experiments:
+                        st.info("💡 Экспериментов с данными не найдено. Попробуйте включить 'Ввести имя эксперимента вручную' для выбора любого эксперимента.")
+            
+            if experiment_name:
                 
                 # Проверяем, изменился ли эксперимент
                 previous_experiment = st.session_state.get("experiment_name", None)
@@ -310,9 +378,17 @@ def render_dashboard():
                 relative_files = list(experiment_dir.glob("relative_features_*.csv"))
                 all_features_files = list(experiment_dir.glob("all_features_*.csv"))
                 
-                if aggregated_files or relative_files or all_features_files:
+                # Проверяем наличие данных (может быть необязательно для ручного ввода)
+                has_data = bool(aggregated_files or relative_files or all_features_files)
+                
+                if has_data:
                     st.success(f"✓ Найдены данные эксперимента: {experiment_name}")
-                    
+                elif use_custom_experiment:
+                    # Для ручного ввода показываем предупреждение, но не блокируем
+                    st.warning(f"⚠️ В эксперименте {experiment_name} не найдены сохраненные данные (aggregated_data, relative_features, all_features)")
+                    st.info("💡 Эксперимент будет использован, но данные могут быть недоступны")
+                
+                if has_data or use_custom_experiment:
                     # Если эксперимент изменился, очищаем кэш данных
                     if experiment_changed:
                         # Очищаем кэш данных
@@ -341,17 +417,20 @@ def render_dashboard():
                     st.session_state.experiment_dir = str(experiment_dir)
                     
                     # Показываем доступные файлы
-                    with st.expander("📁 Доступные данные эксперимента"):
-                        if aggregated_files:
-                            st.text(f"✓ Агрегированные данные: {len(aggregated_files)} файл(ов)")
-                        if relative_files:
-                            st.text(f"✓ Относительные признаки: {len(relative_files)} файл(ов)")
-                        if all_features_files:
-                            st.text(f"✓ Все доступные признаки: {len(all_features_files)} файл(ов)")
-                else:
+                    if has_data:
+                        with st.expander("📁 Доступные данные эксперимента"):
+                            if aggregated_files:
+                                st.text(f"✓ Агрегированные данные: {len(aggregated_files)} файл(ов)")
+                            if relative_files:
+                                st.text(f"✓ Относительные признаки: {len(relative_files)} файл(ов)")
+                            if all_features_files:
+                                st.text(f"✓ Все доступные признаки: {len(all_features_files)} файл(ов)")
+                elif not use_custom_experiment:
+                    # Только для автоматически найденных экспериментов показываем ошибку
                     st.warning(f"⚠️ В эксперименте {experiment_name} не найдены сохраненные данные")
-                    st.info("💡 Используйте 'Использовать директорию' для загрузки из JSON файлов")
+                    st.info("💡 Используйте 'Использовать директорию' для загрузки из JSON файлов или включите 'Ввести имя эксперимента вручную'")
                     use_experiment_data = False
+                    experiment_name = None
             else:
                 st.warning("⚠️ Не найдено экспериментов с сохраненными данными")
                 st.info("💡 Сначала запустите подбор признаков для создания эксперимента")
