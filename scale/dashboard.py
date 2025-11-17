@@ -831,6 +831,12 @@ def render_dashboard():
                         st.info("💡 JSON файлы не загружаются - используются сохраненные агрегированные данные")
                         
                         # Загружаем конфигурацию признаков из эксперимента
+                        # Проверяем, изменился ли эксперимент - если да, нужно восстановить оригинальные метрики
+                        experiment_changed = (
+                            "last_loaded_experiment" not in st.session_state or 
+                            st.session_state.get("last_loaded_experiment") != current_experiment
+                        )
+                        
                         try:
                             from scale import dashboard_experiment_selector
                             experiment_config = dashboard_experiment_selector.load_experiment_features(current_experiment)
@@ -841,16 +847,43 @@ def render_dashboard():
                                 if experiment_config.get('features'):
                                     # Загружаем признаки из эксперимента
                                     experiment_features = experiment_config['features']
-                                    # Фильтруем только существующие признаки
+                                    # Сохраняем все признаки из эксперимента в кэш (включая те, что могут отсутствовать в текущих данных)
+                                    st.session_state.experiment_config_cache['selected_features'] = experiment_features
+                                    
+                                    # Фильтруем только существующие признаки для текущей сессии
                                     valid_features = [f for f in experiment_features if f in df_features_full.columns]
                                     if valid_features:
                                         st.session_state.selected_features = valid_features
-                                        st.info(f"💡 Загружены признаки из эксперимента: {len(valid_features)} признаков")
+                                        # Помечаем, что признаки были загружены из эксперимента
+                                        st.session_state.features_loaded_from_experiment = True
+                                        
+                                        # Восстанавливаем оригинальные метрики из эксперимента
+                                        # Делаем это всегда при загрузке эксперимента (включая повторный выбор)
+                                        if experiment_config.get("metrics"):
+                                            experiment_metrics = experiment_config.get("metrics", {})
+                                            st.session_state.current_metrics = experiment_metrics
+                                            # Сохраняем признаки из эксперимента для метрик
+                                            st.session_state.metrics_features = valid_features.copy()
+                                            # Очищаем флаг features_applied, чтобы не пересчитывать метрики
+                                            if "features_applied" in st.session_state:
+                                                del st.session_state.features_applied
+                                            
+                                            # Если эксперимент изменился или был повторно выбран, показываем сообщение о восстановлении
+                                            if experiment_changed:
+                                                st.success(f"✅ Восстановлены оригинальные метрики из эксперимента (Score: {experiment_metrics.get('score', 0):.4f})")
+                                        
+                                        if len(valid_features) < len(experiment_features):
+                                            st.warning(f"⚠️ Загружено {len(valid_features)} из {len(experiment_features)} признаков эксперимента. Некоторые признаки отсутствуют в текущих данных.")
+                                        else:
+                                            st.info(f"💡 Загружены все {len(valid_features)} признаков из эксперимента")
+                                    else:
+                                        st.error(f"❌ Ни один из {len(experiment_features)} признаков эксперимента не найден в текущих данных!")
                         except Exception as e:
                             st.warning(f"⚠️ Не удалось загрузить конфигурацию из эксперимента: {e}")
                         
                         # Сохраняем информацию о загруженном эксперименте
                         st.session_state.last_loaded_experiment = current_experiment
+                        st.session_state.experiment_name = current_experiment
                         
                         # Обрабатываем данные для дальнейшей работы (аналогично обычной загрузке)
                         if use_relative_features:
@@ -1321,10 +1354,13 @@ def render_dashboard():
                 features_type_key = f"features_type_{use_relative_features}"
                 
                 # Если изменился тип признаков, очищаем выбранные признаки
+                # НО: не очищаем, если признаки загружены из эксперимента
                 if features_type_key not in st.session_state or st.session_state.get(features_type_key) != use_relative_features:
                     # Тип признаков изменился - очищаем и загружаем новый конфиг
-                    if "selected_features" in st.session_state:
-                        del st.session_state.selected_features
+                    # НО: не очищаем, если используется эксперимент
+                    if not (use_experiment_data and "experiment_config_cache" in st.session_state):
+                        if "selected_features" in st.session_state:
+                            del st.session_state.selected_features
                     st.session_state[features_type_key] = use_relative_features
                 
                 if "selected_features" not in st.session_state:
@@ -1384,22 +1420,37 @@ def render_dashboard():
                 
                 # Обновляем список выбранных признаков если изменились доступные признаки
                 # НО только если список не пустой (чтобы не очищать загруженный конфиг)
-                if st.session_state.selected_features:
-                    current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
-                    if len(current_selected) != len(st.session_state.selected_features):
-                        # Обновляем только если есть различия, но не очищаем полностью
-                        if current_selected:
+                # Если используется эксперимент, не перезаписываем selected_features значениями по умолчанию
+                # Это позволяет сохранить признаки из эксперимента
+                # ВАЖНО: Если признаки загружены из эксперимента, только фильтруем существующие, но не перезаписываем
+                if "selected_features" in st.session_state and st.session_state.selected_features:
+                    # Если используется эксперимент, только фильтруем существующие признаки, но сохраняем все
+                    if use_experiment_data and "experiment_config_cache" in st.session_state:
+                        # Только фильтруем, но не перезаписываем - сохраняем все признаки из эксперимента
+                        current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                        # Обновляем только если есть различия, но сохраняем оригинальный список в кэше
+                        if len(current_selected) != len(st.session_state.selected_features):
+                            # Обновляем для текущей сессии, но сохраняем оригинал в кэше
                             st.session_state.selected_features = current_selected
-                        # Если после фильтрации список стал пустым, это означает, что признаки изменились
-                        # В этом случае используем значения по умолчанию
-                        elif len(st.session_state.selected_features) > 0:
-                            # Признаки были, но не совпали - используем значения по умолчанию
-                            st.session_state.selected_features = _get_default_positive_loadings_features(
-                                df_features_for_ui, feature_cols, use_relative_features
-                            )
+                    else:
+                        # Не эксперимент - обычная логика
+                        current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                        if len(current_selected) != len(st.session_state.selected_features):
+                            # Обновляем только если есть различия, но не очищаем полностью
+                            if current_selected:
+                                st.session_state.selected_features = current_selected
+                            # Если после фильтрации список стал пустым, это означает, что признаки изменились
+                            # В этом случае используем значения по умолчанию
+                            elif len(st.session_state.selected_features) > 0:
+                                # Признаки были, но не совпали - используем значения по умолчанию
+                                st.session_state.selected_features = _get_default_positive_loadings_features(
+                                    df_features_for_ui, feature_cols, use_relative_features
+                                )
                 
                 # Если после всех операций список пустой, используем значения по умолчанию
-                if not st.session_state.selected_features or len(st.session_state.selected_features) == 0:
+                # НО: не делаем это для экспериментов, чтобы не потерять загруженные признаки
+                if (not st.session_state.selected_features or len(st.session_state.selected_features) == 0) and \
+                   not (use_experiment_data and "experiment_config_cache" in st.session_state):
                     default_features = _get_default_positive_loadings_features(
                         df_features_for_ui, feature_cols, use_relative_features
                     )
@@ -1428,7 +1479,9 @@ def render_dashboard():
                 
                 # Проверяем, не выбраны ли случайно все признаки (это может быть ошибка)
                 # Если выбрано больше 90% признаков, вероятно это ошибка - очищаем
-                if len(st.session_state.selected_features) > 0.9 * len(feature_cols):
+                # НО: не делаем это для экспериментов, чтобы не потерять загруженные признаки
+                if (len(st.session_state.selected_features) > 0.9 * len(feature_cols) and 
+                    not (use_experiment_data and "experiment_config_cache" in st.session_state)):
                     # Если почти все признаки выбраны, но это не было сделано явно через кнопку "Выбрать все",
                     # то вероятно это ошибка инициализации - очищаем и используем только положительные loadings
                     if "features_all_selected_explicitly" not in st.session_state:
@@ -1444,9 +1497,9 @@ def render_dashboard():
                     ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
                 meta_features = [f for f in feature_cols if 'meta' in f.lower()]
                 immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                    ['neutrophils', 'plasma', 'enterocytes'])]
+                    ['neutrophils', 'plasma', 'enterocytes', 'plasma cells'])]
                 structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                    ['surface epithelium', 'muscularis mucosae'])]
+                    ['surface epithelium', 'muscularis mucosae', 'surface_epithelium', 'muscularis_mucosae'])]
                 paneth_features = [f for f in feature_cols if 'paneth' in f.lower()]
                 other_features = [f for f in feature_cols if f not in pathology_features + meta_features + 
                     immune_features + structural_features + paneth_features]
@@ -1568,6 +1621,12 @@ def render_dashboard():
                             # Сохраняем выбранные признаки
                             st.session_state.selected_features = selected_features_list
                             st.session_state.features_applied = True
+                            
+                            # Очищаем metrics_features, чтобы принудительно пересчитать метрики
+                            if "metrics_features" in st.session_state:
+                                del st.session_state.metrics_features
+                            if "current_metrics" in st.session_state:
+                                del st.session_state.current_metrics
                             
                             # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
                             if "analyzer" in st.session_state and st.session_state.analyzer.gmm is not None:
@@ -2135,12 +2194,28 @@ def render_dashboard():
                     except Exception:
                         pass
                 
-                current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
-                if current_selected:
-                    st.success(f"✅ Выбрано {len(current_selected)} признаков")
-                    with st.expander("📋 Показать выбранные признаки"):
-                        for feat in sorted(current_selected):
-                            st.text(f"  • {feat}")
+                # Загружаем признаки из session_state или из эксперимента
+                if "selected_features" in st.session_state and st.session_state.selected_features:
+                    # Используем сохраненные признаки, фильтруя только существующие
+                    current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                    
+                    # Показываем информацию о загруженных признаках
+                    total_requested = len(st.session_state.selected_features)
+                    total_available = len(current_selected)
+                    
+                    if total_available > 0:
+                        if total_available < total_requested:
+                            st.warning(f"⚠️ Доступно {total_available} из {total_requested} выбранных признаков. Некоторые признаки отсутствуют в данных.")
+                        else:
+                            st.success(f"✅ Выбрано {total_available} признаков")
+                        with st.expander("📋 Показать выбранные признаки"):
+                            for feat in sorted(current_selected):
+                                st.text(f"  • {feat}")
+                    else:
+                        st.error(f"❌ Ни один из {total_requested} выбранных признаков не найден в данных!")
+                        # Fallback: используем все доступные признаки
+                        current_selected = feature_cols.copy()
+                        st.info("💡 Используются все доступные признаки как fallback")
                 else:
                     st.warning("⚠️ Не выбрано ни одного признака! Будут использованы все признаки.")
                     current_selected = feature_cols.copy()
@@ -2153,12 +2228,47 @@ def render_dashboard():
                 
                 # Вычисляем метрики для текущего набора признаков
                 # Метрики пересчитываются при изменении признаков (даже если используется эксперимент)
+                # Проверяем, были ли изменены признаки (через флаг или сравнение с сохраненными)
+                features_were_changed = False
+                
+                # Проверка 1: флаг features_applied
+                if "features_applied" in st.session_state and st.session_state.features_applied:
+                    features_were_changed = True
+                
+                # Проверка 2: сравнение текущих признаков с сохраненными в эксперименте
+                # Эта проверка нужна, чтобы определить, изменились ли признаки относительно оригинала из эксперимента
+                if not features_were_changed and use_experiment_data:
+                    if "experiment_config_cache" in st.session_state and st.session_state.experiment_config_cache:
+                        # experiment_config_cache может содержать 'features' или 'selected_features'
+                        # Берем оригинальные признаки из эксперимента (до фильтрации)
+                        experiment_original_features = set(
+                            st.session_state.experiment_config_cache.get("selected_features", []) or
+                            st.session_state.experiment_config_cache.get("features", [])
+                        )
+                        current_features_set = set(current_selected)
+                        # Сравниваем с оригинальными признаками из эксперимента
+                        if experiment_original_features and current_features_set != experiment_original_features:
+                            features_were_changed = True
+                
+                # Проверка 3: сравнение с последними сохраненными метриками (если они есть)
+                # Это самая важная проверка - сравниваем текущие признаки с теми, для которых были вычислены метрики
+                if not features_were_changed:
+                    if "metrics_features" in st.session_state and st.session_state.metrics_features:
+                        # Сравниваем множества признаков (порядок не важен)
+                        if set(current_selected) != set(st.session_state.metrics_features):
+                            features_were_changed = True
+                    elif "current_metrics" in st.session_state:
+                        # Если метрики есть, но metrics_features нет - значит признаки могли измениться
+                        # Пересчитываем для безопасности
+                        features_were_changed = True
+                
                 should_recalculate_metrics = (
                     len(current_selected) > 0 and 
                     "image" in df_features.columns and
                     (
                         not use_experiment_data or  # Не используется эксперимент
-                        (use_experiment_data and "features_applied" in st.session_state and st.session_state.features_applied)  # Или признаки были изменены
+                        features_were_changed or  # Или признаки были изменены
+                        "current_metrics" not in st.session_state  # Или метрики еще не вычислены
                     )
                 )
                 
@@ -2192,8 +2302,11 @@ def render_dashboard():
                                     
                                     # Сохраняем метрики в session_state для использования при сохранении эксперимента
                                     st.session_state.current_metrics = current_metrics
+                                    # Сохраняем признаки, для которых были вычислены метрики
+                                    st.session_state.metrics_features = current_selected.copy()
                                     
-                                    # Сбрасываем флаг features_applied после пересчета метрик
+                                    # Сбрасываем флаг features_applied после успешного пересчета метрик
+                                    # Теперь проверка изменений будет работать через сравнение metrics_features
                                     if "features_applied" in st.session_state:
                                         del st.session_state.features_applied
                                     
@@ -2271,6 +2384,81 @@ def render_dashboard():
                         except Exception as e:
                             # Не показываем ошибку, просто не отображаем метрики
                             pass
+                else:
+                    # Метрики не пересчитываются - используем метрики из эксперимента, если они есть
+                    if use_experiment_data and "experiment_config_cache" in st.session_state:
+                        experiment_config = st.session_state.experiment_config_cache
+                        if experiment_config.get("metrics") and not features_were_changed:
+                            # Используем метрики из эксперимента
+                            experiment_metrics = experiment_config.get("metrics", {})
+                            st.session_state.current_metrics = experiment_metrics
+                            st.session_state.metrics_features = current_selected.copy()
+                            
+                            # Отображаем метрики из эксперимента
+                            with st.expander("📊 Метрики качества набора признаков (из эксперимента)", expanded=True):
+                                score_val = experiment_metrics.get('score', 0)
+                                separation_val = experiment_metrics.get('separation', 0)
+                                mean_pc1_norm_mod_val = experiment_metrics.get('mean_pc1_norm_mod', 0)
+                                explained_variance_val = experiment_metrics.get('explained_variance', 0)
+                                
+                                st.info(
+                                    f"**Статистика данных:**\n\n"
+                                    f"• Всего образцов: {len(df_features)}\n"
+                                    f"• Выбрано признаков: {len(current_selected)}\n"
+                                    f"• Метрики из эксперимента (признаки не изменены)"
+                                )
+                                
+                                st.markdown("---")
+                                
+                                # Score
+                                st.markdown("### Score (комплексная оценка)")
+                                st.metric("Score", f"{score_val:.4f}")
+                                st.info(
+                                    "**Score** - комплексная оценка качества набора признаков:\n\n"
+                                    "• 40% - разделение между группами (separation)\n"
+                                    "• 30% - позиция mod образцов на нормализованной шкале (ближе к 1)\n"
+                                    "• 30% - объясненная дисперсия PC1\n\n"
+                                    "**Хорошие значения:** > 1.0"
+                                )
+                                
+                                st.markdown("---")
+                                
+                                # Separation
+                                st.markdown("### Separation (разделение групп)")
+                                st.metric("Separation", f"{separation_val:.4f}")
+                                st.info(
+                                    "**Separation** - разница между средними значениями PC1 для патологических (mod) "
+                                    "и нормальных (normal) образцов.\n\n"
+                                    "• Чем больше значение, тем лучше разделение между группами\n"
+                                    "• **Хорошие значения:** > 2.0\n"
+                                    "• **Отличные значения:** > 4.0"
+                                )
+                                
+                                st.markdown("---")
+                                
+                                # Mod (норм. PC1)
+                                st.markdown("### Mod (норм. PC1)")
+                                st.metric("Mod (норм. PC1)", f"{mean_pc1_norm_mod_val:.4f}")
+                                st.info(
+                                    "**Mod (норм. PC1)** - среднее нормализованное значение PC1 для патологических образцов.\n\n"
+                                    "• Значение от 0 до 1 на нормализованной шкале\n"
+                                    "• **Цель:** близко к 1.0 (патологические образцы должны иметь высокие значения PC1)\n"
+                                    "• **Хорошие значения:** > 0.7\n"
+                                    "• **Отличные значения:** > 0.85"
+                                )
+                                
+                                st.markdown("---")
+                                
+                                # Объясненная дисперсия
+                                st.markdown("### Объясненная дисперсия")
+                                st.metric("Объясненная дисперсия", f"{explained_variance_val:.4f}")
+                                st.info(
+                                    "**Объясненная дисперсия** - доля дисперсии данных, объясняемая первой главной компонентой (PC1).\n\n"
+                                    "• Показывает, насколько хорошо PC1 описывает вариативность данных\n"
+                                    "• Значение от 0 до 1 (или от 0% до 100%)\n"
+                                    "• **Хорошие значения:** > 0.3 (30%)\n"
+                                    "• **Отличные значения:** > 0.5 (50%)"
+                                )
                 
                 # Рекомендации
                 with st.expander("💡 Рекомендации по выбору признаков"):
