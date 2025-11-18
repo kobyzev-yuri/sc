@@ -718,28 +718,21 @@ experiments/my_experiment/
 - Визуализация сравнения (6 графиков)
 - Рекомендация лучшего метода по критериям
 
-## Развертывание в Google Cloud Platform
+## Развертывание
 
-Для развертывания дашборда в Google Cloud Platform:
-
-### Быстрый старт
+### Локальный запуск дашборда
 
 ```bash
-# 1. Установите Google Cloud SDK
-curl https://sdk.cloud.google.com | bash
-
-# 2. Войдите и настройте проект
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-# 3. Разверните приложение
-cd /mnt/ai/cnn/sc
-./deploy_gcp.sh
+streamlit run scale/dashboard.py
 ```
 
-Подробные инструкции:
-- **[РАЗВЕРТЫВАНИЕ_GCP.md](РАЗВЕРТЫВАНИЕ_GCP.md)** - краткая инструкция на русском
-- **[DEPLOYMENT_GCP.md](DEPLOYMENT_GCP.md)** - подробная документация
+### Развертывание в Google Cloud Platform
+
+Конфигурация и скрипты для развертывания в GCP находятся в папке `gcp_deployment/` (не включена в git).
+
+Для развертывания:
+1. Склонируйте проект на виртуальную машину GCP
+2. Используйте скрипты из `gcp_deployment/`
 
 ## Следующие шаги
 
@@ -750,6 +743,5 @@ cd /mnt/ai/cnn/sc
 5. ✅ Создать интерпретируемый дашборд - использовать `dashboard.py`
 6. ✅ Развертывание в Google Cloud Platform
 7. ❌ Интеграция всех модулей в единый pipeline (`analyze.py`)
-8. ❌ Unit и интеграционные тесты
-9. ❌ Опционально: Anomaly Detection и Supervised Regression методы
+8. ❌ Опционально: Anomaly Detection и Supervised Regression методы
 

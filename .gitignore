@@ -59,3 +59,6 @@ build/
 .streamlit/
 
 gcp_deployment/
+
+# Тесты (архивированы)
+test/
