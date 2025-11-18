@@ -187,3 +187,5 @@ print(f"CUDA версия: {torch.version.cuda}")
 
 
 
+
+
