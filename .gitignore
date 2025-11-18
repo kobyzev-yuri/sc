@@ -58,3 +58,4 @@ build/
 # Streamlit
 .streamlit/
 
+gcp_deployment/
