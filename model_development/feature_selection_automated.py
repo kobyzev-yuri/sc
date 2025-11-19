@@ -86,12 +86,26 @@ def evaluate_feature_set(
             'explained_variance': 0.0,
         }
     
+    # КРИТИЧНО: Сортируем признаки для стабильности PCA
+    # Порядок признаков может влиять на PCA из-за численной нестабильности
+    # Сортировка гарантирует одинаковый порядок независимо от источника данных
+    sorted_feature_columns = sorted(feature_columns)
+    
+    # Проверяем, что все признаки есть в данных
+    missing_features = [f for f in sorted_feature_columns if f not in df.columns]
+    if missing_features:
+        raise ValueError(f"Признаки отсутствуют в данных: {missing_features}")
+    
     # Обучаем PCA
-    X = df[feature_columns].fillna(0).values
+    # КРИТИЧНО: Используем sorted_feature_columns для стабильности
+    X = df[sorted_feature_columns].fillna(0).values
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    pca = PCA(n_components=1)
+    # КРИТИЧНО: Добавляем random_state для воспроизводимости
+    # PCA может давать разные результаты из-за численной нестабильности
+    # random_state гарантирует одинаковые результаты при одинаковых данных
+    pca = PCA(n_components=1, random_state=42)
     X_pca = pca.fit_transform(X_scaled)
     
     # Вычисляем метрики

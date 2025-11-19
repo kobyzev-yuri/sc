@@ -1,0 +1,98 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Данные и результаты (опционально, можно закомментировать если нужны)
+results/
+experiments/
+models/
+*.pkl
+*.h5
+*.pt
+*.pth
+
+# Документация
+docs/
+*.md
+!README.md
+
+# Архивы
+archive/
+*.zip
+*.tar.gz
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deployment файлы (не нужны в контейнере)
+gcp_deployment/
+*.yaml
+!docker-compose.yml
+cloudbuild.yaml
+app.yaml
+
+# Тесты
+tests/
+test_*.py
+*_test.py
+
+# Notebooks
+notebook/
+*.ipynb
+
+# Старые файлы
+*.old
+*.bak
+
+# SSH ключи
+*.pem
+*.key
+id_rsa*
+
+# Конфигурация
+.env
+.env.local
+*.env
+
+# Большие файлы проекта (если не нужны для dashboard)
+wsi/
+scale/
+model_development/
+

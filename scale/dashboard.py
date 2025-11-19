@@ -3664,11 +3664,7 @@ def render_dashboard():
                     cached_spectrum_key != spectrum_cache_key
                 )
                 
-                    if need_recalculate_spectrum:
-                    else:
-                
                 if need_recalculate_spectrum:
-                        st.error(f"🔍 DEBUG: ⚠️ ПЕРЕСЧЕТ СПЕКТРА! Ключ: {spectrum_cache_key}, сохраненный ключ: {cached_spectrum_key}")
                     # Преобразование в спектральную шкалу
                     with st.spinner("Вычисление спектральной шкалы..."):
                         df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)

@@ -1,21 +1,21 @@
 {
   "selected_features": [
-    "Dysplasia_mean_relative_area",
     "Dysplasia_relative_area",
     "Dysplasia_relative_count",
+    "Enterocytes_mean_relative_area",
+    "Enterocytes_relative_area",
+    "Enterocytes_relative_count",
     "EoE_mean_relative_area",
     "EoE_relative_area",
     "EoE_relative_count",
-    "Granulomas_mean_relative_area",
-    "Granulomas_relative_area",
-    "Granulomas_relative_count",
-    "Meta_relative_area",
-    "Mild_mean_relative_area",
+    "Meta_mean_relative_area",
+    "Meta_relative_count",
     "Mild_relative_area",
     "Mild_relative_count",
     "Moderate_mean_relative_area",
     "Moderate_relative_area",
     "Moderate_relative_count",
+    "Muscularis mucosae_relative_area",
     "Neutrophils_mean_relative_area",
     "Neutrophils_relative_area",
     "Neutrophils_relative_count",
@@ -23,12 +23,11 @@
     "Paneth_relative_area",
     "Paneth_relative_count",
     "Plasma Cells_mean_relative_area",
-    "Plasma Cells_relative_area",
-    "Plasma Cells_relative_count"
+    "Surface epithelium_relative_area"
   ],
   "description": "Выбранные относительные признаки для построения шкалы патологии (изменено пользователем, исходный эксперимент: feature_selection_quick)",
-  "last_updated": "2025-11-18T11:24:16.639814",
-  "n_features": 25,
+  "last_updated": "2025-11-20T00:51:23.010577",
+  "n_features": 24,
   "source_experiment": "feature_selection_quick",
   "user_modified": true
 }
