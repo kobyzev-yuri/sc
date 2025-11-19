@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, List
 import json
 from datetime import datetime
+import logging
 
 # Добавляем путь к проекту для импортов
 project_root = Path(__file__).parent.parent
@@ -36,6 +37,82 @@ except ImportError as e:
 
 from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, preprocessing, eda
 from model_development.feature_selection_automated import evaluate_feature_set, identify_sample_type
+
+# Настройка логирования для отладки
+DEBUG_MODE = False  # Отключено для продакшена
+
+def safe_session_get(key, default=None):
+    """Безопасное получение значения из session_state."""
+    try:
+        # Проверяем, что session_state инициализирован
+        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
+        if not hasattr(st, 'session_state'):
+            return default
+        try:
+            # Пытаемся получить доступ к session_state
+            _ = st.session_state
+        except (RuntimeError, AttributeError):
+            return default
+        return st.session_state.get(key, default)
+    except (RuntimeError, AttributeError, KeyError, TypeError) as e:
+        if DEBUG_MODE:
+            # Не используем st.warning здесь, так как st может быть не инициализирован
+            print(f"⚠️ DEBUG: Ошибка доступа к session_state['{key}']: {e}")
+        return default
+
+def safe_session_set(key, value):
+    """Безопасная установка значения в session_state."""
+    try:
+        # Проверяем, что session_state инициализирован
+        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
+        if not hasattr(st, 'session_state'):
+            if DEBUG_MODE:
+                print(f"⚠️ DEBUG: session_state не инициализирован, пропускаем установку '{key}'")
+            return
+        try:
+            # Пытаемся получить доступ к session_state
+            _ = st.session_state
+        except (RuntimeError, AttributeError):
+            if DEBUG_MODE:
+                print(f"⚠️ DEBUG: session_state не инициализирован, пропускаем установку '{key}'")
+            return
+        st.session_state[key] = value
+    except (RuntimeError, AttributeError, TypeError) as e:
+        if DEBUG_MODE:
+            print(f"⚠️ DEBUG: Ошибка установки session_state['{key}']: {e}")
+
+def safe_session_del(key):
+    """Безопасное удаление ключа из session_state."""
+    try:
+        # Проверяем, что session_state инициализирован
+        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
+        if not hasattr(st, 'session_state'):
+            return
+        try:
+            # Пытаемся получить доступ к session_state
+            _ = st.session_state
+        except (RuntimeError, AttributeError):
+            return
+        if key in st.session_state:
+            del st.session_state[key]
+    except (RuntimeError, AttributeError, KeyError, TypeError):
+        pass
+
+def safe_session_has(key):
+    """Безопасная проверка наличия ключа в session_state."""
+    try:
+        # Проверяем, что session_state инициализирован
+        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
+        if not hasattr(st, 'session_state'):
+            return False
+        try:
+            # Пытаемся получить доступ к session_state
+            _ = st.session_state
+        except (RuntimeError, AttributeError):
+            return False
+        return key in st.session_state
+    except (RuntimeError, AttributeError, TypeError):
+        return False
 
 
 def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
@@ -197,21 +274,31 @@ def render_dashboard():
     st.title("🔬 Анализ патологий Whole Slide Images")
     st.markdown("---")
 
+    # Проверка checkbox'ов больше не используется для пропуска операций
+    # Все операции выполняются нормально при изменении checkbox'ов
+    
     # Боковая панель для загрузки файлов
     with st.sidebar:
         st.header("📁 Загрузка данных")
 
         # Выбор источника данных
+        # Безопасная проверка session_state для предотвращения ошибки инициализации
+        use_dir = safe_session_get("use_directory", False)
+        use_exp = safe_session_get("use_experiment", False)
+        default_index = 1 if use_dir else (2 if use_exp else 0)
+        
         data_source = st.radio(
             "Источник данных",
             ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"],
-            index=1 if "use_directory" in st.session_state and st.session_state.use_directory else (2 if "use_experiment" in st.session_state and st.session_state.use_experiment else 0)
+            index=default_index
         )
         
         use_default_data = (data_source == "Использовать директорию")
         use_experiment_data = (data_source == "Использовать данные из эксперимента")
-        st.session_state.use_directory = use_default_data
-        st.session_state.use_experiment = use_experiment_data
+        
+        # Безопасное сохранение в session_state
+        safe_session_set("use_directory", use_default_data)
+        safe_session_set("use_experiment", use_experiment_data)
 
         if use_default_data:
             # Предустановленные директории
@@ -252,7 +339,7 @@ def render_dashboard():
                 predictions_dir_str = custom_dir
             
             # Сохраняем выбранную директорию в session_state
-            st.session_state.predictions_dir = predictions_dir_str
+            safe_session_set("predictions_dir", predictions_dir_str)
             predictions_dir = Path(predictions_dir_str)
             
             if predictions_dir.exists():
@@ -278,7 +365,7 @@ def render_dashboard():
             # Опция показать все эксперименты
             show_all_experiments = st.checkbox(
                 "Показать все эксперименты",
-                value=st.session_state.get("show_all_experiments", False),
+                value=safe_session_get("show_all_experiments", False),
                 key="show_all_experiments",
                 help="Если включено, показываются все эксперименты из директории, а не только топ-3"
             )
@@ -286,7 +373,7 @@ def render_dashboard():
             # Опция ввести имя эксперимента вручную
             use_custom_experiment = st.checkbox(
                 "Ввести имя эксперимента вручную",
-                value=st.session_state.get("use_custom_experiment", False),
+                value=safe_session_get("use_custom_experiment", False),
                 key="use_custom_experiment",
                 help="Если включено, можно ввести имя любого эксперимента из директории experiments/"
             )
@@ -367,7 +454,7 @@ def render_dashboard():
             if experiment_name:
                 
                 # Проверяем, изменился ли эксперимент
-                previous_experiment = st.session_state.get("experiment_name", None)
+                previous_experiment = safe_session_get("experiment_name", None)
                 experiment_changed = (previous_experiment is not None and previous_experiment != experiment_name)
                 
                 # Загружаем данные из эксперимента
@@ -398,23 +485,26 @@ def render_dashboard():
                             "analyzer", "df_spectrum", "comparison"
                         ]
                         for key in keys_to_remove:
-                            if key in st.session_state:
-                                del st.session_state[key]
+                            safe_session_del(key)
                         
                         # Очищаем кэш спектра и GMM
-                        cache_keys_to_remove = [key for key in st.session_state.keys() 
-                                                if key.startswith("df_aggregated_") or 
-                                                   key.startswith("df_features_full_") or
-                                                   key.startswith("predictions_") or
-                                                   key.startswith("gmm_quality_")]
-                        for key in cache_keys_to_remove:
-                            del st.session_state[key]
+                        try:
+                            all_keys = list(st.session_state.keys()) if hasattr(st, 'session_state') else []
+                            cache_keys_to_remove = [key for key in all_keys 
+                                                    if key.startswith("df_aggregated_") or 
+                                                       key.startswith("df_features_full_") or
+                                                       key.startswith("predictions_") or
+                                                       key.startswith("gmm_quality_")]
+                            for key in cache_keys_to_remove:
+                                safe_session_del(key)
+                        except (RuntimeError, AttributeError):
+                            pass
                         
                         st.info(f"🔄 Эксперимент изменен: {previous_experiment} → {experiment_name}. Данные будут перезагружены.")
                     
                     # Сохраняем информацию об эксперименте
-                    st.session_state.experiment_name = experiment_name
-                    st.session_state.experiment_dir = str(experiment_dir)
+                    safe_session_set("experiment_name", experiment_name)
+                    safe_session_set("experiment_dir", str(experiment_dir))
                     
                     # Показываем доступные файлы
                     if has_data:
@@ -500,8 +590,8 @@ def render_dashboard():
                 if saved_count > 0:
                     st.success(f"✅ Сохранено {saved_count} файлов в {upload_dir}")
                     # Обновляем выбранную директорию на директорию загрузки
-                    st.session_state.predictions_dir = str(upload_dir)
-                    st.session_state.use_directory = True
+                    safe_session_set("predictions_dir", str(upload_dir))
+                    safe_session_set("use_directory", True)
                     st.rerun()
 
         st.markdown("---")
@@ -575,30 +665,60 @@ def render_dashboard():
         st.header("🔮 Инференс")
         
         # Выбор директории для инференса
+        # КРИТИЧНО: results/inference должна быть по умолчанию
         inference_default_dirs = [
+            "results/inference",  # ПРИОРИТЕТ 1: По умолчанию
             "test/predictions",
-            "results/inference",
             "results/predictions",
         ]
         
-        # Поиск существующих директорий
+        # Получаем сохраненную директорию или используем results/inference по умолчанию
+        saved_inference_dir = safe_session_get("inference_dir", "results/inference")
+        
+        # Проверяем, что сохраненная директория все еще существует
+        if saved_inference_dir and Path(saved_inference_dir).exists() and list(Path(saved_inference_dir).glob("*.json")):
+            default_inference_dir = saved_inference_dir
+        else:
+            # Используем results/inference по умолчанию
+            default_inference_dir = "results/inference"
+        
+        # Поиск существующих директорий (в правильном порядке приоритета)
         inference_existing_dirs = []
+        inference_dir_paths = []
         for dir_path in inference_default_dirs:
             p = Path(dir_path)
             if p.exists() and list(p.glob("*.json")):
                 json_count = len(list(p.glob("*.json")))
-                inference_existing_dirs.append(f"{dir_path} ({json_count} файлов)")
+                label = f"{dir_path} ({json_count} файлов)"
+                inference_existing_dirs.append(label)
+                inference_dir_paths.append(dir_path)
+        
+        # Определяем индекс по умолчанию
+        default_index = 0
+        if default_inference_dir in inference_dir_paths:
+            default_index = inference_dir_paths.index(default_inference_dir)
+        elif inference_existing_dirs:
+            # Если results/inference нет в списке, но есть другие - используем первый доступный
+            # Но приоритет остается за results/inference
+            if "results/inference" in [p for p in inference_default_dirs if Path(p).exists()]:
+                # Если results/inference существует, но пустая - все равно ставим её первой
+                inference_existing_dirs.insert(0, "results/inference (0 файлов)")
+                inference_dir_paths.insert(0, "results/inference")
+                default_index = 0
         
         if inference_existing_dirs:
             selected_inference_dir_label = st.selectbox(
                 "Директория для инференса",
                 inference_existing_dirs,
-                index=0,
-                help="Выберите директорию с JSON файлами для инференса"
+                index=default_index,
+                key="inference_dir_selectbox",
+                help="Выберите директорию с JSON файлами для инференса. По умолчанию: results/inference"
             )
             inference_dir_str = selected_inference_dir_label.split(" (")[0]
         else:
-            inference_dir_str = inference_default_dirs[0]
+            # Если нет существующих директорий, используем results/inference по умолчанию
+            inference_dir_str = "results/inference"
+            st.info(f"💡 Директория по умолчанию: {inference_dir_str} (будет использована при наличии файлов)")
         
         # Возможность ввести свой путь
         custom_inference_dir = st.text_input(
@@ -611,7 +731,8 @@ def render_dashboard():
         if custom_inference_dir:
             inference_dir_str = custom_inference_dir
         
-        st.session_state.inference_dir = inference_dir_str
+        # Сохраняем в session_state (всегда, даже если это значение по умолчанию)
+        safe_session_set("inference_dir", inference_dir_str)
         inference_dir = Path(inference_dir_str)
         
         if inference_dir.exists():
@@ -631,37 +752,39 @@ def render_dashboard():
         if st.button("Сохранить эксперимент"):
             # Определяем, какие данные сохранять
             df_to_save = None
-            if "df_results" in st.session_state:
-                df_to_save = st.session_state.df_results
-            elif "df_spectrum" in st.session_state:
-                df_to_save = st.session_state.df_spectrum
+            if safe_session_has("df_results"):
+                df_to_save = safe_session_get("df_results")
+            elif safe_session_has("df_spectrum"):
+                df_to_save = safe_session_get("df_spectrum")
+            else:
+                df_to_save = None
             
             if df_to_save is not None:
                 exp_dir = create_experiment_dir()
                 
                 # Получаем выбранные признаки и метрики
-                selected_features = st.session_state.get("selected_features")
-                current_metrics = st.session_state.get("current_metrics")
-                settings = st.session_state.get("settings", {})
+                selected_features = safe_session_get("selected_features")
+                current_metrics = safe_session_get("current_metrics")
+                settings = safe_session_get("settings", {})
                 use_relative_features = settings.get("use_relative_features", True)
                 
                 # Подготавливаем метаданные
                 metadata = {"settings": settings}
                 
                 # Если есть информация об исходном эксперименте, сохраняем её
-                if use_experiment_data and "experiment_name" in st.session_state:
-                    metadata["source_experiment"] = st.session_state.experiment_name
+                if use_experiment_data and safe_session_has("experiment_name"):
+                    metadata["source_experiment"] = safe_session_get("experiment_name")
                     metadata["method"] = "experiment_loaded"
                 elif selected_features:
                     metadata["method"] = "dashboard_manual"
                     metadata["user_modified"] = True
-                    if use_experiment_data and "experiment_name" in st.session_state:
-                        metadata["source_experiment"] = st.session_state.experiment_name
+                    if use_experiment_data and safe_session_has("experiment_name"):
+                        metadata["source_experiment"] = safe_session_get("experiment_name")
                 
                 save_experiment(
                     exp_dir,
                     df_to_save,
-                    st.session_state.get("analyzer"),
+                    safe_session_get("analyzer"),
                     metadata,
                     selected_features=selected_features,
                     metrics=current_metrics,
@@ -669,9 +792,9 @@ def render_dashboard():
                 )
                 
                 # Сохранение результатов сравнения, если они есть
-                if "comparison" in st.session_state:
+                if safe_session_has("comparison"):
                     try:
-                        comparison = st.session_state.comparison
+                        comparison = safe_session_get("comparison")
                         comparison.save_results(exp_dir / "comparison")
                         st.success(f"Результаты сравнения сохранены в: {exp_dir / 'comparison'}")
                     except Exception as e:
@@ -693,8 +816,9 @@ def render_dashboard():
     # Загрузка данных с кэшированием
     if use_default_data:
         # Получаем выбранную директорию из session_state
-        if "predictions_dir" in st.session_state and st.session_state.predictions_dir:
-            predictions_dir = Path(st.session_state.predictions_dir)
+        predictions_dir_val = safe_session_get("predictions_dir")
+        if predictions_dir_val:
+            predictions_dir = Path(predictions_dir_val)
         else:
             # Если не выбрана, используем первую доступную или дефолтную
             default_dirs = ["results/predictions", "test/predictions", "scale_results/predictions"]
@@ -703,19 +827,19 @@ def render_dashboard():
                 p = Path(dir_path)
                 if p.exists() and list(p.glob("*.json")):
                     predictions_dir = p
-                    st.session_state.predictions_dir = str(p)
+                    safe_session_set("predictions_dir", str(p))
                     break
             if predictions_dir is None:
                 predictions_dir = Path("results/predictions")
-                st.session_state.predictions_dir = "results/predictions"
+                safe_session_set("predictions_dir", "results/predictions")
         
         # Ключ кэша для предиктов
         predictions_cache_key = f"predictions_{predictions_dir}"
         
         # Проверяем кэш
-        if (predictions_cache_key in st.session_state and 
-            st.session_state.get("predictions_dir_cache") == str(predictions_dir)):
-            predictions = st.session_state[predictions_cache_key]
+        if (safe_session_has(predictions_cache_key) and 
+            safe_session_get("predictions_dir_cache") == str(predictions_dir)):
+            predictions = safe_session_get(predictions_cache_key)
         elif predictions_dir.exists():
             json_files = list(predictions_dir.glob("*.json"))
             if json_files:
@@ -729,68 +853,79 @@ def render_dashboard():
                         except Exception as e:
                             st.error(f"Ошибка при загрузке {json_file.name}: {e}")
                     # Сохраняем в кэш
-                    st.session_state[predictions_cache_key] = predictions
-                    st.session_state.predictions_dir_cache = str(predictions_dir)
+                    safe_session_set(predictions_cache_key, predictions)
+                    safe_session_set("predictions_dir_cache", str(predictions_dir))
 
     elif uploaded_files:
         # Для загруженных файлов используем хэш имен файлов как ключ кэша
         files_hash = hash(tuple(sorted([f.name for f in uploaded_files])))
         predictions_cache_key = f"predictions_uploaded_{files_hash}"
         
-        if predictions_cache_key in st.session_state:
-            predictions = st.session_state[predictions_cache_key]
+        if safe_session_has(predictions_cache_key):
+            predictions = safe_session_get(predictions_cache_key)
         else:
             # Загрузка предсказаний из загруженных файлов
             with st.spinner("Загрузка предсказаний..."):
                 predictions = load_predictions_from_upload(uploaded_files)
                 # Сохраняем в кэш
-                st.session_state[predictions_cache_key] = predictions
+                safe_session_set(predictions_cache_key, predictions)
 
     # Загрузка данных из эксперимента (если выбран этот источник)
-    if use_experiment_data and "experiment_dir" in st.session_state:
-        experiment_dir = Path(st.session_state.experiment_dir)
-        current_experiment = st.session_state.get("experiment_name", None)
+    if use_experiment_data and safe_session_has("experiment_dir"):
+        experiment_dir = Path(safe_session_get("experiment_dir"))
+        current_experiment = safe_session_get("experiment_name", None)
         
         # Проверяем, изменился ли эксперимент или нужно перезагрузить данные
-        previous_experiment = st.session_state.get("last_loaded_experiment", None)
+        previous_experiment = safe_session_get("last_loaded_experiment", None)
         experiment_changed = (previous_experiment is not None and previous_experiment != current_experiment)
         need_reload = (
             experiment_changed or
-            "df" not in st.session_state or 
-            st.session_state.get("df") is None or
-            st.session_state.get("experiment_name") != current_experiment
+            not safe_session_has("df") or 
+            safe_session_get("df") is None or
+            safe_session_get("experiment_name") != current_experiment
         )
         
-        # Ищем последние файлы с данными
-        aggregated_files = sorted(experiment_dir.glob("aggregated_data_*.csv"))
-        relative_files = sorted(experiment_dir.glob("relative_features_*.csv"))
-        all_features_files = sorted(experiment_dir.glob("all_features_*.csv"))
+        # Ищем файлы с данными
+        if True:
+            # Ищем последние файлы с данными
+            aggregated_files = sorted(experiment_dir.glob("aggregated_data_*.csv"))
+            relative_files = sorted(experiment_dir.glob("relative_features_*.csv"))
+            all_features_files = sorted(experiment_dir.glob("all_features_*.csv"))
         
         # Если эксперимент изменился, очищаем кэш
         if experiment_changed:
             keys_to_remove = [
                 "df", "df_features", "df_features_full", "df_features_for_selection",
                 "df_all_features", "df_results", "selected_features",
-                "analyzer", "df_spectrum", "comparison", "experiment_config_cache"
+                "analyzer", "df_spectrum", "comparison", "experiment_config_cache",
+                "spectral_settings_key", "features_key", "spectrum_cache_key"  # ОПТИМИЗАЦИЯ: Очищаем ключи кэширования
             ]
             for key in keys_to_remove:
                 if key in st.session_state:
                     del st.session_state[key]
             
             # Очищаем кэш спектра и GMM
-            cache_keys_to_remove = [key for key in st.session_state.keys() 
-                                    if key.startswith("df_aggregated_") or 
-                                       key.startswith("df_features_full_") or
-                                       key.startswith("predictions_") or
-                                       key.startswith("gmm_quality_")]
-            for key in cache_keys_to_remove:
-                del st.session_state[key]
+            try:
+                all_keys = list(st.session_state.keys()) if hasattr(st, 'session_state') else []
+                cache_keys_to_remove = [key for key in all_keys 
+                                        if key.startswith("df_aggregated_") or 
+                                           key.startswith("df_features_full_") or
+                                           key.startswith("predictions_") or
+                                           key.startswith("gmm_quality_")]
+                for key in cache_keys_to_remove:
+                    safe_session_del(key)
+            except (RuntimeError, AttributeError):
+                pass
             
             # Очищаем ключи для отслеживания типа признаков и загруженного эксперимента
-            features_type_keys = [key for key in st.session_state.keys() 
-                                 if key.startswith("features_type_") or key.startswith("loaded_experiment_")]
-            for key in features_type_keys:
-                del st.session_state[key]
+            try:
+                all_keys = list(st.session_state.keys()) if hasattr(st, 'session_state') else []
+                features_type_keys = [key for key in all_keys 
+                                     if key.startswith("features_type_") or key.startswith("loaded_experiment_")]
+                for key in features_type_keys:
+                    safe_session_del(key)
+            except (RuntimeError, AttributeError):
+                pass
         
         if (aggregated_files or relative_files or all_features_files) and need_reload:
             with st.spinner(f"Загрузка данных из эксперимента {current_experiment}..."):
@@ -827,14 +962,19 @@ def render_dashboard():
                         else:
                             df_all_features = aggregate.select_all_feature_columns(df_features_full)
                         
-                        st.success(f"✓ Данные загружены из эксперимента: {st.session_state.get('experiment_name', 'unknown')}")
+                        # КРИТИЧНО: Сохраняем данные из эксперимента в session_state для использования в расчете score
+                        safe_session_set("df_from_experiment", df_from_experiment)
+                        safe_session_set("df_features_from_experiment", df_features_from_experiment)
+                        safe_session_set("df_all_from_experiment", df_all_from_experiment)
+                        
+                        st.success(f"✓ Данные загружены из эксперимента: {safe_session_get('experiment_name', 'unknown')}")
                         st.info("💡 JSON файлы не загружаются - используются сохраненные агрегированные данные")
                         
                         # Загружаем конфигурацию признаков из эксперимента
                         # Проверяем, изменился ли эксперимент - если да, нужно восстановить оригинальные метрики
                         experiment_changed = (
-                            "last_loaded_experiment" not in st.session_state or 
-                            st.session_state.get("last_loaded_experiment") != current_experiment
+                            not safe_session_has("last_loaded_experiment") or 
+                            safe_session_get("last_loaded_experiment") != current_experiment
                         )
                         
                         try:
@@ -842,31 +982,37 @@ def render_dashboard():
                             experiment_config = dashboard_experiment_selector.load_experiment_features(current_experiment)
                             if experiment_config:
                                 # Сохраняем полную конфигурацию эксперимента в session_state
-                                st.session_state.experiment_config_cache = experiment_config
+                                safe_session_set("experiment_config_cache", experiment_config)
                                 
                                 if experiment_config.get('features'):
                                     # Загружаем признаки из эксперимента
                                     experiment_features = experiment_config['features']
                                     # Сохраняем все признаки из эксперимента в кэш (включая те, что могут отсутствовать в текущих данных)
-                                    st.session_state.experiment_config_cache['selected_features'] = experiment_features
+                                    experiment_config['selected_features'] = experiment_features
+                                    safe_session_set("experiment_config_cache", experiment_config)
                                     
                                     # Фильтруем только существующие признаки для текущей сессии
                                     valid_features = [f for f in experiment_features if f in df_features_full.columns]
                                     if valid_features:
-                                        st.session_state.selected_features = valid_features
+                                        safe_session_set("selected_features", valid_features)
                                         # Помечаем, что признаки были загружены из эксперимента
-                                        st.session_state.features_loaded_from_experiment = True
+                                        safe_session_set("features_loaded_from_experiment", True)
+                                        
+                                        # КРИТИЧНО: Сохраняем хэш признаков для проверки изменений
+                                        valid_features_sorted = sorted(valid_features)
+                                        features_hash_from_experiment = hash(tuple(valid_features_sorted))
+                                        safe_session_set("features_key", features_hash_from_experiment)
+                                        
                                         
                                         # Восстанавливаем оригинальные метрики из эксперимента
                                         # Делаем это всегда при загрузке эксперимента (включая повторный выбор)
                                         if experiment_config.get("metrics"):
                                             experiment_metrics = experiment_config.get("metrics", {})
-                                            st.session_state.current_metrics = experiment_metrics
+                                            safe_session_set("current_metrics", experiment_metrics)
                                             # Сохраняем признаки из эксперимента для метрик
-                                            st.session_state.metrics_features = valid_features.copy()
+                                            safe_session_set("metrics_features", valid_features.copy())
                                             # Очищаем флаг features_applied, чтобы не пересчитывать метрики
-                                            if "features_applied" in st.session_state:
-                                                del st.session_state.features_applied
+                                            safe_session_del("features_applied")
                                             
                                             # Если эксперимент изменился или был повторно выбран, показываем сообщение о восстановлении
                                             if experiment_changed:
@@ -882,8 +1028,8 @@ def render_dashboard():
                             st.warning(f"⚠️ Не удалось загрузить конфигурацию из эксперимента: {e}")
                         
                         # Сохраняем информацию о загруженном эксперименте
-                        st.session_state.last_loaded_experiment = current_experiment
-                        st.session_state.experiment_name = current_experiment
+                        safe_session_set("last_loaded_experiment", current_experiment)
+                        safe_session_set("experiment_name", current_experiment)
                         
                         # Обрабатываем данные для дальнейшей работы (аналогично обычной загрузке)
                         if use_relative_features:
@@ -891,8 +1037,9 @@ def render_dashboard():
                             df_features_for_selection = df_features_full.copy()
                             
                             # Применяем выбранные признаки из session_state (если есть) для анализа
-                            if "selected_features" in st.session_state and st.session_state.selected_features:
-                                current_selected = [f for f in st.session_state.selected_features if f in df_features_full.columns]
+                            selected_features_val = safe_session_get("selected_features")
+                            if selected_features_val:
+                                current_selected = [f for f in selected_features_val if f in df_features_full.columns]
                                 if current_selected:
                                     cols_to_keep = ["image"] + current_selected
                                     available_cols = [col for col in cols_to_keep if col in df_features_full.columns]
@@ -923,26 +1070,27 @@ def render_dashboard():
                             df_features_for_selection = df_features.copy()
                             
                             # Применяем выбранные признаки из нового интерфейса
-                            if "selected_features" in st.session_state and st.session_state.selected_features:
-                                current_selected = [f for f in st.session_state.selected_features if f in df_features.columns]
+                            selected_features_val = safe_session_get("selected_features")
+                            if selected_features_val:
+                                current_selected = [f for f in selected_features_val if f in df_features.columns]
                                 if current_selected:
                                     cols_to_keep = ["image"] + current_selected
                                     available_cols = [col for col in cols_to_keep if col in df_features.columns]
                                     df_features = df_features[available_cols]
                         
                         # Сохраняем в session_state для дальнейшей работы
-                        st.session_state.df_results = df_features
-                        st.session_state.df = df
-                        st.session_state.df_features = df_features
-                        st.session_state.df_features_full = df_features_full if use_relative_features else None
-                        st.session_state.df_features_for_selection = df_features_for_selection
-                        st.session_state.df_all_features = df_all_features if 'df_all_features' in locals() else None
-                        st.session_state.settings = {
+                        safe_session_set("df_results", df_features)
+                        safe_session_set("df", df)
+                        safe_session_set("df_features", df_features)
+                        safe_session_set("df_features_full", df_features_full if use_relative_features else None)
+                        safe_session_set("df_features_for_selection", df_features_for_selection)
+                        safe_session_set("df_all_features", df_all_features if 'df_all_features' in locals() else None)
+                        safe_session_set("settings", {
                             "use_relative_features": use_relative_features,
                             "use_spectral_analysis": use_spectral_analysis,
                             "percentile_low": percentile_low,
                             "percentile_high": percentile_high,
-                        }
+                        })
                         
                         # Устанавливаем predictions в None, чтобы не загружать JSON
                         predictions = None
@@ -953,17 +1101,51 @@ def render_dashboard():
                     st.error(f"❌ Ошибка при загрузке данных из эксперимента: {e}")
                     use_experiment_data = False
     
-    # Обработка данных с кэшированием (только если не используем данные из эксперимента)
-    # ИЛИ если используем данные из эксперимента, но они еще не обработаны
-    if (not use_experiment_data and predictions and len(predictions) > 0) or (use_experiment_data and "df" not in st.session_state):
+    # Используем кэшированные данные если они есть
+    # КРИТИЧНО: Проверяем, что данные уже загружены и не нужно их перезагружать
+    df = None
+    df_features = None
+    df_features_full = None
+    df_features_for_selection = None
+    df_all_features = None
+    
+    # Проверяем, есть ли данные в кэше
+    data_already_loaded = safe_session_has("df") and safe_session_get("df") is not None
+    
+    if data_already_loaded:
+        df = safe_session_get("df", None)
+        df_features = safe_session_get("df_features", None)
+        df_features_full = safe_session_get("df_features_full", None)
+        df_features_for_selection = safe_session_get("df_features_for_selection", None)
+        df_all_features = safe_session_get("df_all_features", None)
+    
+    # Обработка данных с кэшированием (только если данные еще не загружены)
+    # КРИТИЧНО: Пропускаем обработку, если данные уже есть в кэше
+    if not data_already_loaded and ((not use_experiment_data and predictions and len(predictions) > 0) or (use_experiment_data and not safe_session_has("df"))):
         # Ключ кэша для агрегированных данных
-        df_cache_key = f"df_aggregated_{hash(str(sorted(predictions.keys())))}"
+        # КРИТИЧНО: Проверяем, что predictions не None перед использованием
+        if predictions is not None and len(predictions) > 0:
+            df_cache_key = f"df_aggregated_{hash(str(sorted(predictions.keys())))}"
+        else:
+            # Если predictions None (данные из эксперимента), используем фиксированный ключ
+            df_cache_key = f"df_aggregated_experiment_{safe_session_get('experiment_name', 'unknown')}"
         
         # Проверяем кэш агрегированных данных
-        if df_cache_key in st.session_state:
-            df = st.session_state[df_cache_key]
+        if safe_session_has(df_cache_key):
+            df = safe_session_get(df_cache_key)
         else:
-            st.success(f"Загружено {len(predictions)} файлов")
+            # Проверяем, что predictions не None перед использованием
+            if predictions is not None and len(predictions) > 0:
+                st.success(f"Загружено {len(predictions)} файлов")
+            else:
+                # Данные из эксперимента - используем уже загруженные данные
+                df = safe_session_get("df")
+                if df is None:
+                    st.error("❌ Данные не найдены. Загрузите данные или выберите эксперимент.")
+                    return
+                # Сохраняем в кэш
+                safe_session_set(df_cache_key, df)
+                return
             # Агрегация данных
             with st.spinner("Агрегация данных..."):
                 rows = []
@@ -976,27 +1158,29 @@ def render_dashboard():
 
                 df = pd.DataFrame(rows)
                 # Сохраняем в кэш
-                st.session_state[df_cache_key] = df
+                safe_session_set(df_cache_key, df)
 
         # Кэширование df_features_full (только если не используем данные из эксперимента)
-        if not use_experiment_data and use_relative_features:
+        # Создаем признаки только если они еще не созданы
+        if not use_experiment_data and use_relative_features and df_features_full is None:
             # Ключ кэша для полного набора признаков
             df_features_full_cache_key = f"df_features_full_{df_cache_key}_{use_relative_features}"
             
-            if df_features_full_cache_key in st.session_state:
-                df_features_full = st.session_state[df_features_full_cache_key]
+            if safe_session_has(df_features_full_cache_key):
+                df_features_full = safe_session_get(df_features_full_cache_key)
             else:
                 # Создаем полный набор относительных признаков
                 df_features_full = aggregate.create_relative_features(df)
                 # Сохраняем в кэш
-                st.session_state[df_features_full_cache_key] = df_features_full
+                safe_session_set(df_features_full_cache_key, df_features_full)
             
             # Используем полный набор для интерфейса выбора признаков
             df_features_for_selection = df_features_full.copy()
             
             # Применяем выбранные признаки из session_state (если есть) для анализа
-            if "selected_features" in st.session_state and st.session_state.selected_features:
-                current_selected = [f for f in st.session_state.selected_features if f in df_features_full.columns]
+            selected_features_val = safe_session_get("selected_features")
+            if selected_features_val:
+                current_selected = [f for f in selected_features_val if f in df_features_full.columns]
                 if current_selected:
                     cols_to_keep = ["image"] + current_selected
                     available_cols = [col for col in cols_to_keep if col in df_features_full.columns]
@@ -1029,53 +1213,61 @@ def render_dashboard():
             df_features_for_selection = df_features.copy()
             
             # Применяем выбранные признаки из нового интерфейса
-            if "selected_features" in st.session_state and st.session_state.selected_features:
-                current_selected = [f for f in st.session_state.selected_features if f in df_features.columns]
+            selected_features_val = safe_session_get("selected_features")
+            if selected_features_val:
+                current_selected = [f for f in selected_features_val if f in df_features.columns]
                 if current_selected:
                     cols_to_keep = ["image"] + current_selected
                     available_cols = [col for col in cols_to_keep if col in df_features.columns]
                     df_features = df_features[available_cols]
 
         # Сохраняем в session_state только если еще не сохранено (для данных из эксперимента уже сохранено)
-        if "df_results" not in st.session_state or not use_experiment_data:
-            st.session_state.df_results = df_features
-            st.session_state.df = df if 'df' in locals() else None
-            st.session_state.df_features = df_features if 'df_features' in locals() else None
-            st.session_state.df_features_full = df_features_full if use_relative_features and 'df_features_full' in locals() else None
-            st.session_state.df_features_for_selection = df_features_for_selection if 'df_features_for_selection' in locals() else (df_features_full.copy() if use_relative_features and 'df_features_full' in locals() else df_features.copy() if 'df_features' in locals() else None)
-            st.session_state.settings = {
+        if not safe_session_has("df_results") or not use_experiment_data:
+            safe_session_set("df_results", df_features)
+            safe_session_set("df", df if 'df' in locals() else None)
+            safe_session_set("df_features", df_features if 'df_features' in locals() else None)
+            safe_session_set("df_features_full", df_features_full if use_relative_features and 'df_features_full' in locals() else None)
+            safe_session_set("df_features_for_selection", df_features_for_selection if 'df_features_for_selection' in locals() else (df_features_full.copy() if use_relative_features and 'df_features_full' in locals() else df_features.copy() if 'df_features' in locals() else None))
+            safe_session_set("settings", {
                 "use_relative_features": use_relative_features,
                 "use_spectral_analysis": use_spectral_analysis,
                 "percentile_low": percentile_low,
                 "percentile_high": percentile_high,
-            }
+            })
         
-        # Восстанавливаем переменные из session_state для использования во вкладках
-        df = st.session_state.get("df", df if 'df' in locals() else None)
-        df_features = st.session_state.get("df_features", df_features if 'df_features' in locals() else None)
-        df_features_full = st.session_state.get("df_features_full", df_features_full if 'df_features_full' in locals() else None)
-        df_features_for_selection = st.session_state.get("df_features_for_selection", df_features_for_selection if 'df_features_for_selection' in locals() else None)
+        # Восстанавливаем переменные из session_state для использования во вкладках (только если они еще не загружены)
+        if df is None:
+            df = safe_session_get("df", None)
+        if df_features is None:
+            df_features = safe_session_get("df_features", None)
+        if df_features_full is None:
+            df_features_full = safe_session_get("df_features_full", None)
+        if df_features_for_selection is None:
+            df_features_for_selection = safe_session_get("df_features_for_selection", None)
     
     # Проверяем, есть ли данные для отображения вкладок
     # Данные могут быть либо из predictions, либо из эксперимента
     has_data = False
     if use_experiment_data:
         # Для данных из эксперимента проверяем session_state
-        has_data = ("df" in st.session_state and st.session_state.df is not None) or \
-                   ("df_features" in st.session_state and st.session_state.df_features is not None)
+        has_data = (safe_session_has("df") and safe_session_get("df") is not None) or \
+                   (safe_session_has("df_features") and safe_session_get("df_features") is not None)
     else:
         # Для обычной загрузки проверяем predictions или session_state
         has_data = (predictions is not None and len(predictions) > 0) or \
-                   ("df" in st.session_state and st.session_state.df is not None)
+                   (safe_session_has("df") and safe_session_get("df") is not None)
     
     # Создаем вкладки только если есть данные
     if has_data:
-        # Восстанавливаем переменные из session_state для использования во вкладках (если еще не восстановлены)
-        if use_experiment_data or "df" in st.session_state:
-            df = st.session_state.get("df", None)
-            df_features = st.session_state.get("df_features", None)
-            df_features_full = st.session_state.get("df_features_full", None)
-            df_features_for_selection = st.session_state.get("df_features_for_selection", None)
+        # Восстанавливаем переменные из session_state для использования во вкладках (только если они еще не загружены)
+        if df is None:
+            df = safe_session_get("df", None)
+        if df_features is None:
+            df_features = safe_session_get("df_features", None)
+        if df_features_full is None:
+            df_features_full = safe_session_get("df_features_full", None)
+        if df_features_for_selection is None:
+            df_features_for_selection = safe_session_get("df_features_for_selection", None)
 
         # Вкладки для визуализации
         tab_names = [
@@ -1090,6 +1282,15 @@ def render_dashboard():
         
         tabs = st.tabs(tab_names)
         tab_features, tab1, tab2, tab3, tab4, tab5, tab_inference = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6]
+        
+        # ПРИМЕЧАНИЕ: Streamlit не сохраняет активную вкладку при rerun от виджетов
+        # Это известное ограничение Streamlit - при rerun от selectbox/checkbox активная вкладка может сброситься
+        # К сожалению, нет прямого способа программно сохранить активную вкладку
+        # Решение: убедиться, что выбор образца не вызывает ненужных rerun
+        
+        # Проблема: Streamlit не предоставляет способ узнать, какая вкладка активна
+        # Но мы можем использовать query_params для сохранения активной вкладки
+        # Или просто убедиться, что выбор образца не вызывает ненужных rerun
 
         with tab1:
             st.header("Загруженные данные")
@@ -1147,22 +1348,229 @@ def render_dashboard():
             st.header("🎯 Выбор признаков для анализа")
             st.markdown("Выберите признаки для построения шкалы патологии. PCA автоматически пересчитывается при загрузке данных. Кнопка 'Применить признаки' появится только при изменении признаков.")
             
+            # ВРЕМЕННО: Расчет текущего score для сравнения с экспериментальным
+            # Пересчет score
+            if True:
+                # Получаем текущие выбранные признаки и вычисляем score
+                current_selected_for_score = safe_session_get("selected_features", [])
+                
+                # КРИТИЧНО: Используем данные из эксперимента, если они загружены
+                # Иначе используем данные из загруженных файлов
+                df_features_for_score = None
+                if use_experiment_data:
+                    # Пробуем получить данные из эксперимента
+                    df_all_from_experiment = safe_session_get("df_all_from_experiment", None)
+                    df_features_from_experiment = safe_session_get("df_features_from_experiment", None)
+                    
+                    if df_all_from_experiment is not None:
+                        # Используем all_features из эксперимента (это то, что использовалось в эксперименте)
+                        df_features_for_score = df_all_from_experiment.copy()
+                    elif df_features_from_experiment is not None:
+                        # Используем relative_features из эксперимента
+                        df_features_for_score = df_features_from_experiment.copy()
+                
+                # Если данные из эксперимента не найдены, используем обычные данные
+                if df_features_for_score is None:
+                    df_features_for_score = safe_session_get("df_features", None)
+                
+                if df_features_for_score is not None and len(df_features_for_score) > 0 and len(current_selected_for_score) > 0:
+                    # Определяем mod и normal образцы
+                    mod_samples_for_score = []
+                    normal_samples_for_score = []
+                    
+                    if "image" in df_features_for_score.columns:
+                        for img_name in df_features_for_score["image"].unique():
+                            sample_type = identify_sample_type(str(img_name))
+                            if sample_type == 'mod':
+                                mod_samples_for_score.append(img_name)
+                            elif sample_type == 'normal':
+                                normal_samples_for_score.append(img_name)
+                    
+                    # Вычисляем score если есть и mod, и normal образцы
+                    if len(mod_samples_for_score) > 0 and len(normal_samples_for_score) > 0:
+                        try:
+                            feature_cols_for_score = [col for col in current_selected_for_score if col in df_features_for_score.columns]
+                            if len(feature_cols_for_score) > 0:
+                                sorted_feature_cols_for_score = sorted(feature_cols_for_score)
+                                current_score_metrics = evaluate_feature_set(
+                                    df_features_for_score,
+                                    sorted_feature_cols_for_score,
+                                    mod_samples_for_score,
+                                    normal_samples_for_score
+                                )
+                                
+                                current_score = current_score_metrics.get('score', None)
+                                
+                                # Показываем текущий score и сравниваем с экспериментальным
+                                if current_score is not None and current_score != -np.inf:
+                                    # Получаем экспериментальный score если есть
+                                    experiment_score = None
+                                    experiment_metrics_full = None
+                                    if use_experiment_data and safe_session_has("experiment_config_cache"):
+                                        experiment_config = safe_session_get("experiment_config_cache")
+                                        if experiment_config and experiment_config.get("metrics"):
+                                            experiment_metrics_full = experiment_config.get("metrics", {})
+                                            experiment_score = experiment_metrics_full.get('score', None)
+                                    
+                                    # Отображаем score для сравнения
+                                    score_col1, score_col2 = st.columns(2)
+                                    with score_col1:
+                                        st.metric("📊 Текущий Score", f"{current_score:.4f}")
+                                    with score_col2:
+                                        if experiment_score is not None:
+                                            diff = current_score - experiment_score
+                                            diff_color = "normal" if abs(diff) < 0.0001 else "inverse"
+                                            st.metric(
+                                                "📈 Экспериментальный Score", 
+                                                f"{experiment_score:.4f}",
+                                                delta=f"{diff:+.4f}" if abs(diff) >= 0.0001 else "0.0000",
+                                                delta_color=diff_color
+                                            )
+                                        else:
+                                            st.metric("📈 Экспериментальный Score", "—")
+                                    
+                                    # Детальное сравнение компонентов score
+                                    if experiment_score is not None and abs(current_score - experiment_score) >= 0.0001:
+                                        st.warning(f"⚠️ Разница между текущим и экспериментальным score: {abs(current_score - experiment_score):.4f}")
+                                        
+                                        # Показываем детальное сравнение компонентов
+                                        with st.expander("🔍 Детальное сравнение компонентов score", expanded=True):
+                                            current_separation = current_score_metrics.get('separation', 0)
+                                            current_mod_norm = current_score_metrics.get('mean_pc1_norm_mod', 0)
+                                            current_variance = current_score_metrics.get('explained_variance', 0)
+                                            
+                                            exp_separation = experiment_metrics_full.get('separation', 0) if experiment_metrics_full else 0
+                                            exp_mod_norm = experiment_metrics_full.get('mean_pc1_norm_mod', 0) if experiment_metrics_full else 0
+                                            exp_variance = experiment_metrics_full.get('explained_variance', 0) if experiment_metrics_full else 0
+                                            
+                                            st.markdown("**Компоненты score:**")
+                                            st.markdown(f"- Separation: текущий = {current_separation:.6f}, экспериментальный = {exp_separation:.6f}, разница = {current_separation - exp_separation:+.6f}")
+                                            st.markdown(f"- Mod (норм. PC1): текущий = {current_mod_norm:.6f}, экспериментальный = {exp_mod_norm:.6f}, разница = {current_mod_norm - exp_mod_norm:+.6f}")
+                                            st.markdown(f"- Explained variance: текущий = {current_variance:.6f}, экспериментальный = {exp_variance:.6f}, разница = {current_variance - exp_variance:+.6f}")
+                                            
+                                            # Проверяем признаки
+                                            experiment_features = None
+                                            if experiment_config and experiment_config.get('features'):
+                                                experiment_features = sorted(experiment_config.get('features', []))
+                                            current_features_sorted = sorted(feature_cols_for_score)
+                                            
+                                            st.markdown("**Признаки:**")
+                                            if experiment_features:
+                                                if current_features_sorted == experiment_features:
+                                                    st.success(f"✅ Признаки идентичны ({len(current_features_sorted)} признаков)")
+                                                else:
+                                                    st.error(f"❌ Признаки различаются!")
+                                                    st.markdown(f"- Текущих признаков: {len(current_features_sorted)}")
+                                                    st.markdown(f"- Экспериментальных признаков: {len(experiment_features)}")
+                                                    missing = set(experiment_features) - set(current_features_sorted)
+                                                    extra = set(current_features_sorted) - set(experiment_features)
+                                                    if missing:
+                                                        st.warning(f"⚠️ Отсутствуют в текущих: {list(missing)[:5]}{'...' if len(missing) > 5 else ''}")
+                                                    if extra:
+                                                        st.warning(f"⚠️ Лишние в текущих: {list(extra)[:5]}{'...' if len(extra) > 5 else ''}")
+                                            
+                                            # Проверяем образцы
+                                            st.markdown("**Образцы:**")
+                                            st.markdown(f"- Mod образцов: текущий = {len(mod_samples_for_score)}, экспериментальный = ?")
+                                            st.markdown(f"- Normal образцов: текущий = {len(normal_samples_for_score)}, экспериментальный = ?")
+                                            
+                                            # Проверяем данные
+                                            st.markdown("**Данные:**")
+                                            st.markdown(f"- Всего строк в df_features: {len(df_features_for_score)}")
+                                            st.markdown(f"- Колонок в df_features: {len(df_features_for_score.columns)}")
+                                            
+                                            # Проверяем, используются ли те же данные из эксперимента
+                                            df_from_experiment = safe_session_get("df_from_experiment")
+                                            df_features_from_experiment = safe_session_get("df_features_from_experiment")
+                                            
+                                            if df_features_from_experiment is not None:
+                                                st.info(f"💡 Используются данные из эксперимента: {len(df_features_from_experiment)} строк")
+                                                
+                                                # Сравниваем данные
+                                                if len(df_features_for_score) == len(df_features_from_experiment):
+                                                    # Проверяем идентичность данных
+                                                    common_cols = set(df_features_for_score.columns) & set(df_features_from_experiment.columns)
+                                                    if sorted_feature_cols_for_score:
+                                                        # Сравниваем значения признаков
+                                                        try:
+                                                            df_current_sorted = df_features_for_score.sort_values("image").reset_index(drop=True)
+                                                            df_exp_sorted = df_features_from_experiment.sort_values("image").reset_index(drop=True)
+                                                            
+                                                            # Проверяем, что образцы совпадают
+                                                            if list(df_current_sorted["image"]) == list(df_exp_sorted["image"]):
+                                                                # Сравниваем значения признаков
+                                                                for feat in sorted_feature_cols_for_score[:5]:  # Первые 5 признаков
+                                                                    if feat in common_cols:
+                                                                        diff = (df_current_sorted[feat] - df_exp_sorted[feat]).abs().max()
+                                                                        if diff > 1e-6:
+                                                                            st.warning(f"⚠️ Признак {feat}: максимальная разница = {diff:.10f}")
+                                                                # Проверяем все признаки
+                                                                all_diffs = []
+                                                                for feat in sorted_feature_cols_for_score:
+                                                                    if feat in common_cols:
+                                                                        diff = (df_current_sorted[feat] - df_exp_sorted[feat]).abs().max()
+                                                                        all_diffs.append(diff)
+                                                                if all_diffs:
+                                                                    max_diff = max(all_diffs)
+                                                                    if max_diff > 1e-6:
+                                                                        st.error(f"❌ Обнаружены различия в данных! Максимальная разница: {max_diff:.10f}")
+                                                                    else:
+                                                                        st.success(f"✅ Данные идентичны (разница < 1e-6)")
+                                                            else:
+                                                                st.warning("⚠️ Образцы различаются между текущими данными и данными эксперимента")
+                                                        except Exception as e:
+                                                                st.warning(f"⚠️ Ошибка сравнения данных: {e}")
+                                                else:
+                                                    st.warning(f"⚠️ Разное количество строк: текущие = {len(df_features_for_score)}, эксперимент = {len(df_features_from_experiment)}")
+                                            else:
+                                                st.warning("⚠️ Данные НЕ из эксперимента - возможно, используются другие данные!")
+                                                
+                                                # Показываем, откуда данные
+                                                df_from_upload = safe_session_get("df")
+                                                if df_from_upload is not None:
+                                                    st.info(f"💡 Данные загружены из загруженных файлов: {len(df_from_upload)} строк")
+                                                else:
+                                                    inference_dir = safe_session_get("inference_dir", "results/inference")
+                                                    st.info(f"💡 Данные загружены из директории: {inference_dir}")
+                                                
+                                                st.markdown("**💡 Рекомендация:** Загрузите эксперимент, чтобы использовать те же данные, что и в эксперименте")
+                                        
+                                    elif experiment_score is not None:
+                                        st.success("✅ Score совпадает с экспериментальным!")
+                                    
+                                    st.markdown("---")
+                        except Exception as e:
+                                st.warning(f"⚠️ Не удалось вычислить текущий score: {e}")
+            
             # Используем полный набор признаков для интерфейса выбора
             # Сначала проверяем session_state, потом локальные переменные
-            if "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                df_features_for_ui = st.session_state.df_features_for_selection
+            df_features_for_selection_val = safe_session_get("df_features_for_selection")
+            if df_features_for_selection_val is not None:
+                df_features_for_ui = df_features_for_selection_val
             elif 'df_features_for_selection' in locals() and df_features_for_selection is not None:
                 df_features_for_ui = df_features_for_selection
-            elif use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                df_features_for_ui = st.session_state.df_features_full
-            elif use_relative_features and 'df_features_full' in locals() and df_features_full is not None:
-                df_features_for_ui = df_features_full
-            elif "df_features" in st.session_state and st.session_state.df_features is not None:
-                df_features_for_ui = st.session_state.df_features
-            elif 'df_features' in locals() and df_features is not None:
-                df_features_for_ui = df_features
+            elif use_relative_features:
+                df_features_full_val = safe_session_get("df_features_full")
+                if df_features_full_val is not None:
+                    df_features_for_ui = df_features_full_val
+                elif 'df_features_full' in locals() and df_features_full is not None:
+                    df_features_for_ui = df_features_full
+                else:
+                    df_features_val = safe_session_get("df_features")
+                    if df_features_val is not None:
+                        df_features_for_ui = df_features_val
+                    elif 'df_features' in locals() and df_features is not None:
+                        df_features_for_ui = df_features
+                    else:
+                        df_features_for_ui = None
             else:
-                df_features_for_ui = None
+                df_features_val = safe_session_get("df_features")
+                if df_features_val is not None:
+                    df_features_for_ui = df_features_val
+                elif 'df_features' in locals() and df_features is not None:
+                    df_features_for_ui = df_features
+                else:
+                    df_features_for_ui = None
             
             if df_features_for_ui is not None and len(df_features_for_ui) > 0:
                 # Для абсолютных признаков Crypts остается в df_features (он является признаком)
@@ -1355,15 +1763,14 @@ def render_dashboard():
                 
                 # Если изменился тип признаков, очищаем выбранные признаки
                 # НО: не очищаем, если признаки загружены из эксперимента
-                if features_type_key not in st.session_state or st.session_state.get(features_type_key) != use_relative_features:
+                if not safe_session_has(features_type_key) or safe_session_get(features_type_key) != use_relative_features:
                     # Тип признаков изменился - очищаем и загружаем новый конфиг
                     # НО: не очищаем, если используется эксперимент
-                    if not (use_experiment_data and "experiment_config_cache" in st.session_state):
-                        if "selected_features" in st.session_state:
-                            del st.session_state.selected_features
-                    st.session_state[features_type_key] = use_relative_features
+                    if not (use_experiment_data and safe_session_has("experiment_config_cache")):
+                        safe_session_del("selected_features")
+                    safe_session_set(features_type_key, use_relative_features)
                 
-                if "selected_features" not in st.session_state:
+                if not safe_session_has("selected_features"):
                     # Пытаемся загрузить из конфигурационного файла
                     config_features = load_feature_config()
                     
@@ -1371,7 +1778,7 @@ def render_dashboard():
                         # Фильтруем только существующие признаки
                         valid_config_features = [f for f in config_features if f in feature_cols]
                         if valid_config_features:
-                            st.session_state.selected_features = valid_config_features
+                            safe_session_set("selected_features", valid_config_features)
                         else:
                             # Если конфигурация не подходит, используем положительные loadings + EoE
                             # Показываем, какие признаки не совпали
@@ -1385,7 +1792,7 @@ def render_dashboard():
                                 df_features_for_ui, feature_cols, use_relative_features
                             )
                             if default_features:
-                                st.session_state.selected_features = default_features
+                                safe_session_set("selected_features", default_features)
                             else:
                                 # Если и по умолчанию ничего не получилось, используем базовый набор
                                 basic_features = []
@@ -1397,14 +1804,14 @@ def render_dashboard():
                                 basic_features.extend(eoe_features)
                                 basic_features = list(set([f for f in basic_features if f in feature_cols]))
                                 if basic_features:
-                                    st.session_state.selected_features = basic_features
+                                    safe_session_set("selected_features", basic_features)
                     else:
                         # Если конфигурации нет, используем положительные loadings + EoE
                         default_features = _get_default_positive_loadings_features(
                             df_features_for_ui, feature_cols, use_relative_features
                         )
                         if default_features:
-                            st.session_state.selected_features = default_features
+                            safe_session_set("selected_features", default_features)
                         else:
                             # Если и по умолчанию ничего не получилось, используем базовый набор
                             basic_features = []
@@ -1416,46 +1823,50 @@ def render_dashboard():
                             basic_features.extend(eoe_features)
                             basic_features = list(set([f for f in basic_features if f in feature_cols]))
                             if basic_features:
-                                st.session_state.selected_features = basic_features
+                                safe_session_set("selected_features", basic_features)
                 
                 # Обновляем список выбранных признаков если изменились доступные признаки
                 # НО только если список не пустой (чтобы не очищать загруженный конфиг)
                 # Если используется эксперимент, не перезаписываем selected_features значениями по умолчанию
                 # Это позволяет сохранить признаки из эксперимента
                 # ВАЖНО: Если признаки загружены из эксперимента, только фильтруем существующие, но не перезаписываем
-                if "selected_features" in st.session_state and st.session_state.selected_features:
+                selected_features_val = safe_session_get("selected_features")
+                if selected_features_val:
                     # Если используется эксперимент, только фильтруем существующие признаки, но сохраняем все
-                    if use_experiment_data and "experiment_config_cache" in st.session_state:
+                    if use_experiment_data and safe_session_has("experiment_config_cache"):
                         # Только фильтруем, но не перезаписываем - сохраняем все признаки из эксперимента
-                        current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                        current_selected = [f for f in selected_features_val if f in feature_cols]
                         # Обновляем только если есть различия, но сохраняем оригинальный список в кэше
-                        if len(current_selected) != len(st.session_state.selected_features):
+                        if len(current_selected) != len(selected_features_val):
                             # Обновляем для текущей сессии, но сохраняем оригинал в кэше
-                            st.session_state.selected_features = current_selected
+                            safe_session_set("selected_features", current_selected)
                     else:
                         # Не эксперимент - обычная логика
-                        current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
-                        if len(current_selected) != len(st.session_state.selected_features):
+                        current_selected = [f for f in selected_features_val if f in feature_cols]
+                        if len(current_selected) != len(selected_features_val):
                             # Обновляем только если есть различия, но не очищаем полностью
                             if current_selected:
-                                st.session_state.selected_features = current_selected
+                                safe_session_set("selected_features", current_selected)
                             # Если после фильтрации список стал пустым, это означает, что признаки изменились
                             # В этом случае используем значения по умолчанию
-                            elif len(st.session_state.selected_features) > 0:
+                            elif len(selected_features_val) > 0:
                                 # Признаки были, но не совпали - используем значения по умолчанию
-                                st.session_state.selected_features = _get_default_positive_loadings_features(
+                                default_features = _get_default_positive_loadings_features(
                                     df_features_for_ui, feature_cols, use_relative_features
                                 )
+                                if default_features:
+                                    safe_session_set("selected_features", default_features)
                 
                 # Если после всех операций список пустой, используем значения по умолчанию
                 # НО: не делаем это для экспериментов, чтобы не потерять загруженные признаки
-                if (not st.session_state.selected_features or len(st.session_state.selected_features) == 0) and \
-                   not (use_experiment_data and "experiment_config_cache" in st.session_state):
+                selected_features_val = safe_session_get("selected_features")
+                if (not selected_features_val or len(selected_features_val) == 0) and \
+                   not (use_experiment_data and safe_session_has("experiment_config_cache")):
                     default_features = _get_default_positive_loadings_features(
                         df_features_for_ui, feature_cols, use_relative_features
                     )
                     if default_features:
-                        st.session_state.selected_features = default_features
+                        safe_session_set("selected_features", default_features)
                     else:
                         # Если и по умолчанию ничего не получилось, используем базовый набор признаков
                         # Выбираем патологические признаки + EoE (если есть)
@@ -1474,191 +1885,297 @@ def render_dashboard():
                         basic_features = list(set([f for f in basic_features if f in feature_cols]))
                         
                         if basic_features:
-                            st.session_state.selected_features = basic_features
+                            safe_session_set("selected_features", basic_features)
                         # Если и базовых признаков нет, оставляем пустым
                 
                 # Проверяем, не выбраны ли случайно все признаки (это может быть ошибка)
                 # Если выбрано больше 90% признаков, вероятно это ошибка - очищаем
                 # НО: не делаем это для экспериментов, чтобы не потерять загруженные признаки
-                if (len(st.session_state.selected_features) > 0.9 * len(feature_cols) and 
-                    not (use_experiment_data and "experiment_config_cache" in st.session_state)):
+                selected_features_val = safe_session_get("selected_features")
+                if selected_features_val and (len(selected_features_val) > 0.9 * len(feature_cols) and 
+                    not (use_experiment_data and safe_session_has("experiment_config_cache"))):
                     # Если почти все признаки выбраны, но это не было сделано явно через кнопку "Выбрать все",
                     # то вероятно это ошибка инициализации - очищаем и используем только положительные loadings
-                    if "features_all_selected_explicitly" not in st.session_state:
+                    if not safe_session_has("features_all_selected_explicitly"):
                         # Пересчитываем положительные loadings
-                        st.session_state.selected_features = _get_default_positive_loadings_features(
+                        default_features = _get_default_positive_loadings_features(
                             df_features_for_ui, feature_cols, use_relative_features
                         )
+                        if default_features:
+                            safe_session_set("selected_features", default_features)
                 
                 # НЕ устанавливаем все признаки по умолчанию - пользователь должен выбрать явно
                 
-                # Группируем признаки по категориям для удобства отображения
-                pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                    ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
-                meta_features = [f for f in feature_cols if 'meta' in f.lower()]
-                immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                    ['neutrophils', 'plasma', 'enterocytes', 'plasma cells'])]
-                structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
-                    ['surface epithelium', 'muscularis mucosae', 'surface_epithelium', 'muscularis_mucosae'])]
-                paneth_features = [f for f in feature_cols if 'paneth' in f.lower()]
-                other_features = [f for f in feature_cols if f not in pathology_features + meta_features + 
-                    immune_features + structural_features + paneth_features]
+                # ОПТИМИЗАЦИЯ: Кэшируем группировку признаков, чтобы не выполнять ее при каждом rerun
+                feature_groups_cache_key = f"feature_groups_{hash(tuple(sorted(feature_cols)))}"
+                if safe_session_has(feature_groups_cache_key):
+                    # Используем кэшированную группировку
+                    cached_groups = safe_session_get(feature_groups_cache_key)
+                    pathology_features = cached_groups.get("pathology", [])
+                    meta_features = cached_groups.get("meta", [])
+                    immune_features = cached_groups.get("immune", [])
+                    structural_features = cached_groups.get("structural", [])
+                    paneth_features = cached_groups.get("paneth", [])
+                    other_features = cached_groups.get("other", [])
+                else:
+                    # Группируем признаки по категориям для удобства отображения
+                    pathology_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                        ['dysplasia', 'mild', 'moderate', 'eoe', 'granulomas'])]
+                    meta_features = [f for f in feature_cols if 'meta' in f.lower()]
+                    immune_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                        ['neutrophils', 'plasma', 'enterocytes', 'plasma cells'])]
+                    structural_features = [f for f in feature_cols if any(x in f.lower() for x in 
+                        ['surface epithelium', 'muscularis mucosae', 'surface_epithelium', 'muscularis_mucosae'])]
+                    paneth_features = [f for f in feature_cols if 'paneth' in f.lower()]
+                    other_features = [f for f in feature_cols if f not in pathology_features + meta_features + 
+                        immune_features + structural_features + paneth_features]
+                    # Сохраняем в кэш
+                    safe_session_set(feature_groups_cache_key, {
+                        "pathology": pathology_features,
+                        "meta": meta_features,
+                        "immune": immune_features,
+                        "structural": structural_features,
+                        "paneth": paneth_features,
+                        "other": other_features
+                    })
                 
                 # Проверяем, есть ли структурные признаки в данных
                 if not structural_features:
                     st.warning("⚠️ Surface epithelium и Muscularis mucosae не найдены в данных. "
                              "Убедитесь, что они присутствуют в исходных предсказаниях (JSON файлах).")
                 
-                # Форма для выбора признаков
-                with st.form("feature_selection_form", clear_on_submit=False):
-                    # Группируем в колонки для компактности
-                    col1, col2, col3 = st.columns(3)
+                # УБИРАЕМ ФОРМУ - используем обычные checkbox'ы с key
+                # Это предотвращает ненужные rerun при изменении checkbox'ов
+                # Группируем в колонки для компактности
+                col1, col2, col3 = st.columns(3)
+                
+                # Получаем текущие выбранные признаки из session_state (через key checkbox'ов)
+                # Checkbox'ы с key автоматически сохраняют состояние в session_state
+                selected_features_dict = {}
+                
+                # ОПТИМИЗАЦИЯ: Получаем selected_features ОДИН РАЗ для всех checkbox'ов
+                saved_selected_features_list = safe_session_get("selected_features", [])
+                saved_selected_features_set = set(saved_selected_features_list) if saved_selected_features_list else set()
+                
+                with col1:
+                    if pathology_features:
+                        # Считаем выбранные через session_state (checkbox'ы с key автоматически сохраняют состояние)
+                        # ОПТИМИЗАЦИЯ: Используем кэшированное значение вместо множественных вызовов safe_session_get
+                        selected_count = sum(1 for f in pathology_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Патологические:** ({selected_count}/{len(pathology_features)} выбрано)")
+                        for feat in pathology_features:
+                            checkbox_key = f"feat_{feat}"
+                            # КРИТИЧНО: Инициализируем значение ПЕРЕД созданием виджета
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            # Создаем виджет БЕЗ value - значение автоматически возьмется из session_state
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Патологические:** (нет признаков)")
                     
-                    selected_features_dict = {}
+                    if meta_features:
+                        selected_count = sum(1 for f in meta_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Метаплазия:** ({selected_count}/{len(meta_features)} выбрано)")
+                        for feat in meta_features:
+                            checkbox_key = f"feat_{feat}"
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Метаплазия:** (нет признаков)")
                     
-                    # Убеждаемся, что все признаки из feature_cols попадут в словарь
-                    # Сначала добавляем все признаки в словарь со значением False
-                    for feat in feature_cols:
-                        selected_features_dict[feat] = False
+                with col2:
+                    if immune_features:
+                        selected_count = sum(1 for f in immune_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Иммунные клетки:** ({selected_count}/{len(immune_features)} выбрано)")
+                        for feat in immune_features:
+                            checkbox_key = f"feat_{feat}"
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Иммунные клетки:** (нет признаков)")
                     
-                    with col1:
-                        if pathology_features:
-                            selected_count = sum(1 for f in pathology_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Патологические:** ({selected_count}/{len(pathology_features)} выбрано)")
-                            for feat in pathology_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Патологические:** (нет признаков)")
+                    if paneth_features:
+                        selected_count = sum(1 for f in paneth_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Paneth:** ({selected_count}/{len(paneth_features)} выбрано)")
+                        for feat in paneth_features:
+                            checkbox_key = f"feat_{feat}"
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Paneth:** (нет признаков)")
+                
+                with col3:
+                    if structural_features:
+                        selected_count = sum(1 for f in structural_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Структурные:** ({selected_count}/{len(structural_features)} выбрано)")
+                        for feat in structural_features:
+                            checkbox_key = f"feat_{feat}"
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Структурные:** (нет признаков)")
+                    
+                    if other_features:
+                        selected_count = sum(1 for f in other_features if safe_session_get(f"feat_{f}", False))
+                        st.markdown(f"**Другие:** ({selected_count}/{len(other_features)} выбрано)")
+                        for feat in other_features:
+                            checkbox_key = f"feat_{feat}"
+                            if not safe_session_has(checkbox_key):
+                                initial_value = feat in saved_selected_features_set
+                                safe_session_set(checkbox_key, initial_value)
+                            checkbox_value = st.checkbox(feat, key=checkbox_key)
+                            selected_features_dict[feat] = checkbox_value
+                    else:
+                        st.markdown("**Другие:** (нет признаков)")
+                    
+                # Показываем информацию о всех признаках
+                st.markdown("---")
+                # ОПТИМИЗАЦИЯ: Используем уже вычисленный selected_features_dict вместо повторного обхода всех признаков
+                # Получаем текущие выбранные признаки из словаря, который уже был заполнен при создании checkbox'ов
+                current_selected_from_checkboxes = [feat for feat, is_selected in selected_features_dict.items() if is_selected]
+                
+                total_selected = len(current_selected_from_checkboxes)
+                st.caption(f"📊 Всего признаков: {len(feature_cols)}, Выбрано: {total_selected}, Не выбрано: {len(feature_cols) - total_selected}")
+                
+                # Показываем невыбранные признаки для удобства
+                unselected_features = [f for f in feature_cols if f not in current_selected_from_checkboxes]
+                if unselected_features:
+                    with st.expander(f"👁️ Показать невыбранные признаки ({len(unselected_features)})"):
+                        for feat in sorted(unselected_features):
+                            st.text(f"  ☐ {feat}")
+                
+                # ОПТИМИЗАЦИЯ: Проверяем, изменились ли признаки сравнивая списки
+                current_selected_sorted = sorted(current_selected_from_checkboxes)
+                
+                # Получаем сохраненные признаки
+                saved_selected_features = safe_session_get("selected_features", [])
+                saved_selected_sorted = sorted(saved_selected_features) if saved_selected_features else []
+                
+                # КРИТИЧНО: Сравниваем сами списки признаков
+                lists_are_different = (current_selected_sorted != saved_selected_sorted)
+                
+                # КРИТИЧНО: Признаки изменились ТОЛЬКО если списки различаются
+                if not saved_selected_sorted:
+                    # Нет сохраненных признаков - считаем что признаки изменились (первая загрузка)
+                    features_changed = True
+                elif lists_are_different:
+                    # Списки различаются - признаки точно изменились
+                    features_changed = True
+                else:
+                    # Списки совпадают - признаки не изменились
+                    features_changed = False
+                
+                
+                # Показываем статус изменения признаков
+                if features_changed:
+                    st.info(f"ℹ️ Выбрано {len(current_selected_sorted)} признаков. Нажмите 'Перерасчет метрик' для применения изменений.")
+                else:
+                    st.success(f"✅ Признаки не изменены ({len(current_selected_sorted)} выбрано). Перерасчет не требуется.")
+                
+                # Кнопка перерасчета - ВСЕГДА показываем и всегда активна
+                # При нажатии проверяем, изменились ли чекбоксы
+                # Если не изменились - показываем warning и не выполняем пересчет
+                st.markdown("---")
+                apply_button = st.button("🔄 Перерасчет метрик", use_container_width=True, type="primary")
+                
+                if apply_button:
+                    # Проверяем, изменились ли признаки
+                    if not features_changed:
+                        # Признаки не изменились - показываем warning и не выполняем пересчет
+                        st.warning("⚠️ Признаки не изменились. Пересчет не требуется.")
+                    elif len(current_selected_sorted) == 0:
+                        st.error("❌ Необходимо выбрать хотя бы один признак!")
+                    else:
+                        # Признаки изменились - выполняем пересчет
+                        selected_features_list = current_selected_sorted.copy()
                         
-                        if meta_features:
-                            selected_count = sum(1 for f in meta_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Метаплазия:** ({selected_count}/{len(meta_features)} выбрано)")
-                            for feat in meta_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Метаплазия:** (нет признаков)")
-                    
-                    with col2:
-                        if immune_features:
-                            selected_count = sum(1 for f in immune_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Иммунные клетки:** ({selected_count}/{len(immune_features)} выбрано)")
-                            for feat in immune_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Иммунные клетки:** (нет признаков)")
+                        # Сохраняем выбранные признаки
+                        safe_session_set("selected_features", selected_features_list)
                         
-                        if paneth_features:
-                            selected_count = sum(1 for f in paneth_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Paneth:** ({selected_count}/{len(paneth_features)} выбрано)")
-                            for feat in paneth_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Paneth:** (нет признаков)")
-                    
-                    with col3:
-                        if structural_features:
-                            selected_count = sum(1 for f in structural_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Структурные:** ({selected_count}/{len(structural_features)} выбрано)")
-                            for feat in structural_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Структурные:** (нет признаков)")
+                        # КРИТИЧНО: Проверяем, совпадают ли признаки с экспериментальными
+                        # Если совпадают - используем метрики из эксперимента, не пересчитываем
+                        use_experiment_metrics = False
+                        if use_experiment_data and safe_session_has("experiment_config_cache"):
+                            experiment_config = safe_session_get("experiment_config_cache")
+                            if experiment_config and experiment_config.get("features"):
+                                experiment_features = sorted(experiment_config.get("features", []))
+                                current_features_sorted = sorted(selected_features_list)
+                                # Если признаки совпадают с экспериментальными - используем метрики из эксперимента
+                                if experiment_features == current_features_sorted:
+                                    use_experiment_metrics = True
+                                    if experiment_config.get("metrics"):
+                                        experiment_metrics = experiment_config.get("metrics", {})
+                                        safe_session_set("current_metrics", experiment_metrics)
+                                        safe_session_set("metrics_features", selected_features_list.copy())
                         
-                        if other_features:
-                            selected_count = sum(1 for f in other_features if f in st.session_state.selected_features)
-                            st.markdown(f"**Другие:** ({selected_count}/{len(other_features)} выбрано)")
-                            for feat in other_features:
-                                selected_features_dict[feat] = st.checkbox(
-                                    feat,
-                                    value=feat in st.session_state.selected_features,
-                                    key=f"feat_{feat}"
-                                )
-                        else:
-                            st.markdown("**Другие:** (нет признаков)")
-                    
-                    # Показываем информацию о всех признаках
-                    st.markdown("---")
-                    total_selected = sum(1 for v in selected_features_dict.values() if v)
-                    st.caption(f"📊 Всего признаков: {len(feature_cols)}, Выбрано: {total_selected}, Не выбрано: {len(feature_cols) - total_selected}")
-                    
-                    # Показываем невыбранные признаки для удобства
-                    unselected_features = [f for f in feature_cols if not selected_features_dict.get(f, False)]
-                    if unselected_features:
-                        with st.expander(f"👁️ Показать невыбранные признаки ({len(unselected_features)})"):
-                            for feat in sorted(unselected_features):
-                                st.text(f"  ☐ {feat}")
-                    
-                    # Кнопка применения - всегда активна
-                    apply_button = st.form_submit_button("✅ Применить признаки", use_container_width=True, type="primary")
-                    
-                    if apply_button:
-                        # Применяем выбранные чекбоксы
-                        selected_features_list = [f for f, selected in selected_features_dict.items() if selected]
-                        
-                        if len(selected_features_list) == 0:
-                            st.error("❌ Необходимо выбрать хотя бы один признак!")
-                        else:
-                            # Сохраняем выбранные признаки
-                            st.session_state.selected_features = selected_features_list
-                            st.session_state.features_applied = True
-                            
+                        # Устанавливаем флаг features_applied только если метрики нужно пересчитать
+                        if not use_experiment_metrics:
+                            safe_session_set("features_applied", True)
                             # Очищаем metrics_features, чтобы принудительно пересчитать метрики
-                            if "metrics_features" in st.session_state:
-                                del st.session_state.metrics_features
-                            if "current_metrics" in st.session_state:
-                                del st.session_state.current_metrics
-                            
-                            # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
-                            if "analyzer" in st.session_state and st.session_state.analyzer.gmm is not None:
-                                # Очищаем GMM из анализатора
-                                st.session_state.analyzer.gmm = None
-                            # Очищаем кэш спектра
-                            if "df_spectrum" in st.session_state:
-                                del st.session_state.df_spectrum
-                            if "spectrum_cache_key" in st.session_state:
-                                del st.session_state.spectrum_cache_key
-                            # Очищаем кэш качества GMM
-                            cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
+                            safe_session_del("metrics_features")
+                            safe_session_del("current_metrics")
+                        else:
+                            safe_session_set("features_applied", False)
+                            # НЕ очищаем метрики - используем из эксперимента
+                        
+                        # Сохраняем хэш признаков для будущих сравнений
+                        selected_features_sorted = sorted(selected_features_list)
+                        new_features_hash = hash(tuple(selected_features_sorted))
+                        safe_session_set("features_key", new_features_hash)
+                        
+                        
+                        # Очищаем GMM и спектр, если они были обучены (чтобы пересчитались с новыми признаками)
+                        analyzer_val = safe_session_get("analyzer")
+                        if analyzer_val is not None and analyzer_val.gmm is not None:
+                            # Очищаем GMM из анализатора
+                            analyzer_val.gmm = None
+                            safe_session_set("analyzer", analyzer_val)
+                        # Очищаем кэш спектра
+                        safe_session_del("df_spectrum")
+                        safe_session_del("spectrum_cache_key")
+                        # Очищаем кэш качества GMM
+                        try:
+                            all_keys = list(st.session_state.keys()) if hasattr(st, 'session_state') else []
+                            cache_keys_to_remove = [key for key in all_keys if key.startswith("gmm_quality_")]
                             for key in cache_keys_to_remove:
-                                del st.session_state[key]
-                            
-                            # Очищаем старые метрики, чтобы они пересчитались с новыми признаками
-                            if "current_metrics" in st.session_state:
-                                del st.session_state.current_metrics
-                            
-                            # Сохраняем в конфигурационный файл
-                            if save_feature_config(selected_features_list):
-                                st.success("✅ Конфигурация сохранена в файл")
-                                # Показываем информацию об исходном эксперименте (если есть)
-                                try:
-                                    with open(config_file, 'r', encoding='utf-8') as f:
-                                        saved_config = json.load(f)
-                                    if saved_config.get("source_experiment"):
-                                        st.info(f"💡 Исходный эксперимент: **{saved_config['source_experiment']}** (не изменен)")
-                                except Exception:
-                                    pass
-                            
-                            st.rerun()
+                                safe_session_del(key)
+                        except (RuntimeError, AttributeError):
+                            pass
+                        
+                        # Очищаем старые метрики, чтобы они пересчитались с новыми признаками
+                        if safe_session_has("current_metrics"):
+                            safe_session_del("current_metrics")
+                        
+                        # Сохраняем в конфигурационный файл
+                        if save_feature_config(selected_features_list):
+                            st.success("✅ Конфигурация сохранена в файл")
+                            # Показываем информацию об исходном эксперименте (если есть)
+                            try:
+                                with open(config_file, 'r', encoding='utf-8') as f:
+                                    saved_config = json.load(f)
+                                if saved_config.get("source_experiment"):
+                                    st.info(f"💡 Исходный эксперимент: **{saved_config['source_experiment']}** (не изменен)")
+                            except Exception:
+                                pass
+                        
+                        # Сбрасываем флаг изменения checkbox'ов после применения признаков
+                        safe_session_set("features_applied", False)  # Сбрасываем флаг применения
+                        st.success("✅ Признаки применены. Метрики будут пересчитаны.")
+                        st.rerun()
                 
                 # Показываем текущий статус
                 st.markdown("---")
@@ -1666,10 +2183,10 @@ def render_dashboard():
                 # Показываем информацию об источнике конфигурации
                 # Приоритет: если используется эксперимент, показываем его данные из session_state
                 # Иначе показываем данные из конфига
-                if use_experiment_data and "experiment_name" in st.session_state and "experiment_config_cache" in st.session_state:
+                if use_experiment_data and safe_session_has("experiment_name") and safe_session_has("experiment_config_cache"):
                     # Используем данные из текущего эксперимента
-                    current_exp_name = st.session_state.experiment_name
-                    experiment_config = st.session_state.experiment_config_cache
+                    current_exp_name = safe_session_get("experiment_name")
+                    experiment_config = safe_session_get("experiment_config_cache")
                     
                     st.success(f"📊 Конфигурация из эксперимента: **{current_exp_name}**")
                     
@@ -2195,12 +2712,13 @@ def render_dashboard():
                         pass
                 
                 # Загружаем признаки из session_state или из эксперимента
-                if "selected_features" in st.session_state and st.session_state.selected_features:
+                selected_features_val = safe_session_get("selected_features", [])
+                if selected_features_val:
                     # Используем сохраненные признаки, фильтруя только существующие
-                    current_selected = [f for f in st.session_state.selected_features if f in feature_cols]
+                    current_selected = [f for f in selected_features_val if f in feature_cols]
                     
                     # Показываем информацию о загруженных признаках
-                    total_requested = len(st.session_state.selected_features)
+                    total_requested = len(selected_features_val)
                     total_available = len(current_selected)
                     
                     if total_available > 0:
@@ -2220,11 +2738,25 @@ def render_dashboard():
                     st.warning("⚠️ Не выбрано ни одного признака! Будут использованы все признаки.")
                     current_selected = feature_cols.copy()
                 
-                # Применяем выбранные признаки к df_features
-                if current_selected:
-                    cols_to_keep = ["image"] + current_selected
-                    available_cols = [col for col in cols_to_keep if col in df_features.columns]
-                    df_features = df_features[available_cols]
+                # ОПТИМИЗАЦИЯ: Применяем выбранные признаки к df_features только если они изменились
+                # Кэшируем последний набор примененных признаков
+                last_applied_features_key = "last_applied_features_for_df"
+                last_applied_features = safe_session_get(last_applied_features_key, [])
+                
+                if current_selected != last_applied_features:
+                    # Признаки изменились - применяем фильтрацию
+                    if current_selected:
+                        cols_to_keep = ["image"] + current_selected
+                        available_cols = [col for col in cols_to_keep if col in df_features.columns]
+                        df_features = df_features[available_cols]
+                    safe_session_set(last_applied_features_key, current_selected.copy())
+                else:
+                    # Признаки не изменились - используем уже отфильтрованный df_features из кэша
+                    # Применяем фильтрацию для совместимости (но это быстрая операция)
+                    if current_selected:
+                        cols_to_keep = ["image"] + current_selected
+                        available_cols = [col for col in cols_to_keep if col in df_features.columns]
+                        df_features = df_features[available_cols]
                 
                 # Вычисляем метрики для текущего набора признаков
                 # Метрики пересчитываются при изменении признаков (даже если используется эксперимент)
@@ -2232,18 +2764,19 @@ def render_dashboard():
                 features_were_changed = False
                 
                 # Проверка 1: флаг features_applied
-                if "features_applied" in st.session_state and st.session_state.features_applied:
+                if safe_session_get("features_applied", False):
                     features_were_changed = True
                 
                 # Проверка 2: сравнение текущих признаков с сохраненными в эксперименте
                 # Эта проверка нужна, чтобы определить, изменились ли признаки относительно оригинала из эксперимента
                 if not features_were_changed and use_experiment_data:
-                    if "experiment_config_cache" in st.session_state and st.session_state.experiment_config_cache:
+                    experiment_config_cache = safe_session_get("experiment_config_cache")
+                    if experiment_config_cache:
                         # experiment_config_cache может содержать 'features' или 'selected_features'
                         # Берем оригинальные признаки из эксперимента (до фильтрации)
                         experiment_original_features = set(
-                            st.session_state.experiment_config_cache.get("selected_features", []) or
-                            st.session_state.experiment_config_cache.get("features", [])
+                            experiment_config_cache.get("selected_features", []) or
+                            experiment_config_cache.get("features", [])
                         )
                         current_features_set = set(current_selected)
                         # Сравниваем с оригинальными признаками из эксперимента
@@ -2253,24 +2786,31 @@ def render_dashboard():
                 # Проверка 3: сравнение с последними сохраненными метриками (если они есть)
                 # Это самая важная проверка - сравниваем текущие признаки с теми, для которых были вычислены метрики
                 if not features_were_changed:
-                    if "metrics_features" in st.session_state and st.session_state.metrics_features:
+                    metrics_features_val = safe_session_get("metrics_features", [])
+                    if metrics_features_val:
                         # Сравниваем множества признаков (порядок не важен)
-                        if set(current_selected) != set(st.session_state.metrics_features):
+                        if set(current_selected) != set(metrics_features_val):
                             features_were_changed = True
-                    elif "current_metrics" in st.session_state:
+                    elif safe_session_has("current_metrics"):
                         # Если метрики есть, но metrics_features нет - значит признаки могли измениться
                         # Пересчитываем для безопасности
                         features_were_changed = True
                 
+                # КРИТИЧНО: Метрики пересчитываются ТОЛЬКО если:
+                # 1. Признаки были применены через кнопку (features_applied = True), ИЛИ
+                # 2. Метрики еще не вычислены (первая загрузка), ИЛИ
+                # 3. Не используется эксперимент (обычная загрузка данных)
+                # НЕ пересчитываем метрики при простом изменении checkbox'ов без нажатия кнопки!
                 should_recalculate_metrics = (
                     len(current_selected) > 0 and 
                     "image" in df_features.columns and
                     (
                         not use_experiment_data or  # Не используется эксперимент
-                        features_were_changed or  # Или признаки были изменены
-                        "current_metrics" not in st.session_state  # Или метрики еще не вычислены
+                        features_were_changed or  # Или признаки были применены через кнопку
+                        not safe_session_has("current_metrics")  # Или метрики еще не вычислены (первая загрузка)
                     )
                 )
+                
                 
                 if should_recalculate_metrics:
                     # Определяем mod и normal образцы из имен файлов
@@ -2289,9 +2829,14 @@ def render_dashboard():
                         try:
                             feature_cols_for_metrics = [col for col in current_selected if col in df_features.columns]
                             if len(feature_cols_for_metrics) > 0:
+                                # КРИТИЧНО: Сортируем признаки для стабильности PCA
+                                # Порядок признаков может влиять на PCA из-за численной нестабильности
+                                sorted_feature_cols = sorted(feature_cols_for_metrics)
+                                
+                                
                                 current_metrics = evaluate_feature_set(
                                     df_features,
-                                    feature_cols_for_metrics,
+                                    sorted_feature_cols,  # Используем отсортированные признаки
                                     mod_samples,
                                     normal_samples
                                 )
@@ -2301,14 +2846,14 @@ def render_dashboard():
                                     current_metrics.get('separation', -np.inf) != -np.inf):
                                     
                                     # Сохраняем метрики в session_state для использования при сохранении эксперимента
-                                    st.session_state.current_metrics = current_metrics
+                                    safe_session_set("current_metrics", current_metrics)
                                     # Сохраняем признаки, для которых были вычислены метрики
-                                    st.session_state.metrics_features = current_selected.copy()
+                                    safe_session_set("metrics_features", current_selected.copy())
                                     
                                     # Сбрасываем флаг features_applied после успешного пересчета метрик
                                     # Теперь проверка изменений будет работать через сравнение metrics_features
-                                    if "features_applied" in st.session_state:
-                                        del st.session_state.features_applied
+                                    if safe_session_has("features_applied"):
+                                        safe_session_del("features_applied")
                                     
                                     # Определяем заголовок в зависимости от того, используется ли эксперимент
                                     if use_experiment_data:
@@ -2386,13 +2931,13 @@ def render_dashboard():
                             pass
                 else:
                     # Метрики не пересчитываются - используем метрики из эксперимента, если они есть
-                    if use_experiment_data and "experiment_config_cache" in st.session_state:
-                        experiment_config = st.session_state.experiment_config_cache
+                    if use_experiment_data and safe_session_has("experiment_config_cache"):
+                        experiment_config = safe_session_get("experiment_config_cache")
                         if experiment_config.get("metrics") and not features_were_changed:
                             # Используем метрики из эксперимента
                             experiment_metrics = experiment_config.get("metrics", {})
-                            st.session_state.current_metrics = experiment_metrics
-                            st.session_state.metrics_features = current_selected.copy()
+                            safe_session_set("current_metrics", experiment_metrics)
+                            safe_session_set("metrics_features", current_selected.copy())
                             
                             # Отображаем метрики из эксперимента
                             with st.expander("📊 Метрики качества набора признаков (из эксперимента)", expanded=True):
@@ -2498,9 +3043,10 @@ def render_dashboard():
 
             if len(df_features) > 0:
                 # Используем только признаки, выбранные в секции "🎯 Выбор признаков"
-                if "selected_features" in st.session_state and st.session_state.selected_features:
+                selected_features_val = safe_session_get("selected_features", [])
+                if selected_features_val:
                     selected_features = [
-                        f for f in st.session_state.selected_features 
+                        f for f in selected_features_val 
                         if f in df_features.columns
                     ]
                 else:
@@ -2529,6 +3075,7 @@ def render_dashboard():
                                 ax.set_ylabel("Frequency")
                                 ax.grid(True, alpha=0.3)
                                 st.pyplot(fig)
+                                plt.close(fig)  # Закрываем фигуру для предотвращения утечки памяти
                             else:
                                 st.warning(f"Признак '{feature}' отсутствует в данных")
                 else:
@@ -2636,20 +3183,88 @@ def render_dashboard():
                 """)
 
             if use_spectral_analysis and len(df_features) > 0:
+                # ОПТИМИЗАЦИЯ: Используем стабильный ключ на основе выбранных признаков и настроек
+                # вместо хэша всего DataFrame, который может изменяться при каждом RUN
+                
+                
+                # Получаем список признаков, которые будут использоваться для PCA
+                # ПРИОРИТЕТ: 1) Признаки из эксперимента, 2) selected_features из session_state, 3) Все числовые колонки
+                feature_columns_for_key = None
+                
+                if use_experiment_data and safe_session_has("experiment_config_cache"):
+                    experiment_config = safe_session_get("experiment_config_cache")
+                    if experiment_config:
+                        experiment_features = experiment_config.get('features', [])
+                        if experiment_features:
+                            # Используем признаки из эксперимента - это самый стабильный вариант
+                            feature_columns_for_key = sorted(experiment_features)
+                
+                # Если не нашли в эксперименте, проверяем selected_features
+                if feature_columns_for_key is None:
+                    selected_features_val = safe_session_get("selected_features")
+                    if selected_features_val:
+                        feature_columns_for_key = sorted(selected_features_val)
+                
+                # Если все еще нет, используем все числовые колонки из df_features
+                if feature_columns_for_key is None:
+                    numeric_cols = df_features.select_dtypes(include=[np.number]).columns.tolist()
+                    if "image" in numeric_cols:
+                        numeric_cols.remove("image")
+                    feature_columns_for_key = sorted(numeric_cols) if numeric_cols else []
+                
+                # КРИТИЧНО: Используем стабильный ключ на основе признаков
+                # НИКОГДА не используем len(df_features) или другие нестабильные метрики
+                if feature_columns_for_key:
+                    features_hash = hash(tuple(feature_columns_for_key))
+                else:
+                    # Fallback: используем имя эксперимента как идентификатор (если есть)
+                    if use_experiment_data and safe_session_has("experiment_name"):
+                        exp_name = safe_session_get("experiment_name")
+                        features_hash = hash(f"experiment_{exp_name}")
+                    else:
+                        # Последний fallback: используем фиксированное значение
+                        features_hash = hash("default_features")
+                
+                spectral_settings_key = f"spectral_{features_hash}_{percentile_low}_{percentile_high}"
+                
                 # Проверяем, нужно ли переобучить анализатор
-                # Переобучаем только если изменились параметры или данных нет в session_state
-                spectral_settings_key = f"spectral_settings_{hash(str(df_features.values.tobytes()))}_{percentile_low}_{percentile_high}"
+                # Переобучаем только если:
+                # 1. Анализатора нет в session_state
+                # 2. Изменился ключ настроек (признаки или процентили)
+                # 3. Явно установлен флаг features_applied (признаки были изменены через кнопку)
+                has_analyzer = safe_session_has("analyzer")
+                has_settings_key = safe_session_has("spectral_settings_key")
+                settings_match = safe_session_get("spectral_settings_key") == spectral_settings_key if has_settings_key else False
+                features_applied = safe_session_get("features_applied", False)
+                
                 need_retrain = (
-                    "analyzer" not in st.session_state or
-                    "spectral_settings_key" not in st.session_state or
-                    st.session_state.spectral_settings_key != spectral_settings_key or
-                    ("features_applied" in st.session_state and st.session_state.features_applied)  # Признаки были изменены
+                    not has_analyzer or
+                    not has_settings_key or
+                    not settings_match or
+                    features_applied
                 )
+                
+                debug_info = []
+                if not has_analyzer:
+                    debug_info.append("нет анализатора")
+                    if not has_settings_key:
+                        debug_info.append("нет ключа настроек")
+                    if has_settings_key and not settings_match:
+                        cached_key = safe_session_get("spectral_settings_key")
+                        debug_info.append(f"ключ не совпадает: {cached_key} != {spectral_settings_key}")
+                    if features_applied:
+                        debug_info.append("признаки изменены")
+                    
+                if DEBUG_MODE:
+                    if need_retrain:
+                        st.error(f"🔍 DEBUG: ⚠️ ПЕРЕОБУЧЕНИЕ НЕОБХОДИМО: {', '.join(debug_info) if debug_info else 'неизвестная причина'}")
+                    else:
+                        st.success(f"🔍 DEBUG: ✅ Переобучение НЕ необходимо. Ключ совпадает: {spectral_settings_key}")
                 
                 # Если загружаем данные из эксперимента, пытаемся загрузить сохраненную модель
                 analyzer_loaded_from_experiment = False
-                if use_experiment_data and "experiment_dir" in st.session_state and need_retrain:
-                    experiment_dir = Path(st.session_state.experiment_dir)
+                if use_experiment_data and safe_session_has("experiment_dir") and need_retrain:
+                    experiment_dir = Path(safe_session_get("experiment_dir"))
                     model_path = experiment_dir / "spectral_analyzer.pkl"
                     if model_path.exists():
                         try:
@@ -2668,31 +3283,75 @@ def render_dashboard():
                             st.warning(f"⚠️ Не удалось загрузить модель из эксперимента: {e}")
                 
                 if analyzer_loaded_from_experiment:
+                    # ОПТИМИЗАЦИЯ: Проверяем, можно ли использовать уже вычисленный спектр
+                    # Если модель загружена и настройки совпадают, можно пропустить fit_spectrum
+                    spectrum_already_fitted = (
+                        analyzer.modes is not None and 
+                        analyzer.pc1_percentiles is not None and
+                        len(analyzer.modes) > 0
+                    )
+                    
                     # Модель загружена из эксперимента, нужно вычислить df_pca и fit_spectrum
                     # Используем полный набор данных, чтобы все признаки из модели были доступны
-                    if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                        df_for_transform = st.session_state.df_features_full
-                    elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                        df_for_transform = st.session_state.df_features_for_selection
+                    if use_relative_features and safe_session_has("df_features_full") and safe_session_get("df_features_full") is not None:
+                        df_for_transform = safe_session_get("df_features_full")
+                    elif safe_session_has("df_features_for_selection") and safe_session_get("df_features_for_selection") is not None:
+                        df_for_transform = safe_session_get("df_features_for_selection")
                     else:
                         df_for_transform = df_features
+                    
                     df_pca = analyzer.transform_pca(df_for_transform)
-                    analyzer.fit_spectrum(
-                        df_pca,
-                        percentile_low=percentile_low,
-                        percentile_high=percentile_high,
-                    )
+                    
+                    # ОПТИМИЗАЦИЯ: Пересчитываем спектр только если он не загружен или настройки изменились
+                    if not spectrum_already_fitted:
+                        analyzer.fit_spectrum(
+                            df_pca,
+                            percentile_low=percentile_low,
+                            percentile_high=percentile_high,
+                        )
+                    else:
+                        # Используем загруженный спектр из модели
+                        pass
+                    
                     # Сохраняем в session_state
-                    st.session_state.analyzer = analyzer
-                    st.session_state.df_pca = df_pca
-                    st.session_state.spectral_settings_key = spectral_settings_key
+                    safe_session_set("analyzer", analyzer)
+                    safe_session_set("df_pca", df_pca)
+                    safe_session_set("spectral_settings_key", spectral_settings_key)
+                    # Сохраняем ключ признаков для отслеживания изменений
+                    if feature_columns_for_key:
+                        safe_session_set("features_key", hash(tuple(feature_columns_for_key)))
                     # Очищаем кэш GMM качества, так как PCA изменился
-                    cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
-                    for key in cache_keys_to_remove:
-                        del st.session_state[key]
-                    # Очищаем сохраненный спектр
-                    if "df_spectrum" in st.session_state:
-                        del st.session_state["df_spectrum"]
+                    try:
+                        # Используем безопасный способ получения всех ключей
+                        all_keys = []
+                        if safe_session_has("_temp_keys_check"):
+                            # Если session_state доступен, получаем ключи безопасно
+                            try:
+                                if hasattr(st, 'session_state'):
+                                    _ = st.session_state  # Проверка доступности
+                                    all_keys = list(st.session_state.keys())
+                            except (RuntimeError, AttributeError):
+                                pass
+                        cache_keys_to_remove = [key for key in all_keys if key.startswith("gmm_quality_")]
+                        for key in cache_keys_to_remove:
+                            safe_session_del(key)
+                    except (RuntimeError, AttributeError):
+                        pass
+                    
+                    # Вычисляем спектр для сохранения в кэш (даже если он уже был загружен)
+                    # Это нужно для того, чтобы при переходе на вкладку спектр был доступен
+                    use_gmm_for_spectrum = safe_session_get("use_gmm_spectral", True)
+                    use_gmm_classification_for_spectrum = safe_session_get("use_gmm_classification", False) if use_gmm_for_spectrum and analyzer.gmm is not None else False
+                    
+                    # Вычисляем спектр сразу после загрузки модели
+                    df_spectrum_loaded = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification_for_spectrum)
+                    
+                    # Сохраняем спектр в кэш сразу после загрузки модели
+                    gmm_n_components_for_cache = analyzer.gmm.n_components if analyzer.gmm is not None else 0
+                    spectrum_cache_key_loaded = f"spectrum_{spectral_settings_key}_{use_gmm_for_spectrum}_{use_gmm_classification_for_spectrum}_{gmm_n_components_for_cache}"
+                    safe_session_set("df_spectrum", df_spectrum_loaded)
+                    safe_session_set("spectrum_cache_key", spectrum_cache_key_loaded)
+                    
                 
                 if need_retrain and not analyzer_loaded_from_experiment:
                     # Обучение спектрального анализатора
@@ -2700,17 +3359,19 @@ def render_dashboard():
                         analyzer = spectral_analysis.SpectralAnalyzer()
 
                         # Если загружаем данные из эксперимента, используем признаки из конфигурации эксперимента
-                        if use_experiment_data and "experiment_config_cache" in st.session_state:
-                            experiment_config = st.session_state.experiment_config_cache
+                        if use_experiment_data and safe_session_has("experiment_config_cache"):
+                            experiment_config = safe_session_get("experiment_config_cache")
                             experiment_features = experiment_config.get('features', [])
                             if experiment_features:
                                 # Используем ТОЧНО те же признаки, что были в эксперименте
                                 # Проверяем против полного набора признаков (df_features_full или df_features_for_selection),
                                 # а не против уже отфильтрованного df_features
-                                if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                                    check_against_df = st.session_state.df_features_full
-                                elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                                    check_against_df = st.session_state.df_features_for_selection
+                                df_features_full_val = safe_session_get("df_features_full")
+                                df_features_for_selection_val = safe_session_get("df_features_for_selection")
+                                if use_relative_features and df_features_full_val is not None:
+                                    check_against_df = df_features_full_val
+                                elif df_features_for_selection_val is not None:
+                                    check_against_df = df_features_for_selection_val
                                 else:
                                     check_against_df = df_features
                                 
@@ -2747,11 +3408,13 @@ def render_dashboard():
                         
                         # Для обучения PCA используем полный набор данных, если загружаем эксперимент
                         # Это гарантирует, что все признаки из эксперимента будут доступны
-                        if use_experiment_data and "experiment_config_cache" in st.session_state:
-                            if use_relative_features and "df_features_full" in st.session_state and st.session_state.df_features_full is not None:
-                                df_for_pca = st.session_state.df_features_full
-                            elif "df_features_for_selection" in st.session_state and st.session_state.df_features_for_selection is not None:
-                                df_for_pca = st.session_state.df_features_for_selection
+                        if use_experiment_data and safe_session_has("experiment_config_cache"):
+                            df_features_full_val = safe_session_get("df_features_full")
+                            df_features_for_selection_val = safe_session_get("df_features_for_selection")
+                            if use_relative_features and df_features_full_val is not None:
+                                df_for_pca = df_features_full_val
+                            elif df_features_for_selection_val is not None:
+                                df_for_pca = df_features_for_selection_val
                             else:
                                 df_for_pca = df_features
                         else:
@@ -2771,39 +3434,68 @@ def render_dashboard():
                         )
                         
                         # Сохраняем в session_state
-                        st.session_state.analyzer = analyzer
-                        st.session_state.df_pca = df_pca
-                        st.session_state.spectral_settings_key = spectral_settings_key
+                        safe_session_set("analyzer", analyzer)
+                        safe_session_set("df_pca", df_pca)
+                        safe_session_set("spectral_settings_key", spectral_settings_key)
+                        # Сохраняем ключ признаков для отслеживания изменений
+                        if feature_columns_for_key:
+                            safe_session_set("features_key", hash(tuple(feature_columns_for_key)))
                         # Очищаем флаг принудительного пересчета
                         # Очищаем флаг применения признаков после пересчета PCA
-                        if "features_applied" in st.session_state:
-                            del st.session_state.features_applied
+                        safe_session_del("features_applied")
                         # Очищаем кэш GMM качества, так как PCA изменился
-                        cache_keys_to_remove = [key for key in st.session_state.keys() if key.startswith("gmm_quality_")]
-                        for key in cache_keys_to_remove:
-                            del st.session_state[key]
+                        try:
+                            # Безопасное получение списка ключей
+                            all_keys = list(st.session_state.keys()) if hasattr(st, 'session_state') else []
+                            cache_keys_to_remove = [key for key in all_keys if key.startswith("gmm_quality_")]
+                            for key in cache_keys_to_remove:
+                                safe_session_del(key)
+                        except (RuntimeError, AttributeError):
+                            pass
                         # Очищаем сохраненный спектр
-                        if "df_spectrum" in st.session_state:
-                            del st.session_state.df_spectrum
+                        safe_session_del("df_spectrum")
                 else:
                     # Используем сохраненный анализатор
-                    analyzer = st.session_state.analyzer
-                    df_pca = st.session_state.df_pca
+                    analyzer = safe_session_get("analyzer")
+                    df_pca = safe_session_get("df_pca")
+                    
+                    if analyzer is None or df_pca is None:
+                        st.error("❌ Ошибка: анализатор или df_pca отсутствуют в session_state")
+                        st.stop()
+                    
+                    # КРИТИЧНО: Проверяем, что ключ совпадает с сохраненным
+                    # Если не совпадает, это означает, что что-то изменилось и нужно пересчитать
+                    if not safe_session_has("spectral_settings_key"):
+                        # Если ключа нет, устанавливаем текущий (не должно происходить в нормальной работе)
+                        safe_session_set("spectral_settings_key", spectral_settings_key)
+                    elif safe_session_get("spectral_settings_key") != spectral_settings_key:
+                        # Если ключ не совпадает, но анализатор есть - это проблема
+                        # Это может означать, что признаки изменились, но анализатор не пересчитан
+                        # Для безопасности: если нет явного флага features_applied, просто обновляем ключ
+                        # Это предотвратит бесконечный цикл rerun
+                        if not safe_session_get("features_applied", False):
+                            # Обновляем ключ без пересчета - это предотвратит rerun
+                            safe_session_set("spectral_settings_key", spectral_settings_key)
+                        # Если features_applied установлен, need_retrain уже True и пересчет произойдет
                 
+                # ОПТИМИЗАЦИЯ: Используем стабильный ключ для кэширования GMM качества
+                # Вместо хэша данных используем настройки и количество точек
                 # Оценка качества GMM (BIC) - выполняется автоматически при спектральном анализе
                 # Кэширование результатов оценки качества
-                cache_key = f"gmm_quality_{hash(str(df_pca['PC1'].values.tobytes()))}"
-                if cache_key not in st.session_state:
+                n_samples = len(df_pca)
+                gmm_quality_key = f"gmm_quality_{n_samples}_{percentile_low}_{percentile_high}_{spectral_settings_key}"
+                cache_key = gmm_quality_key
+                if not safe_session_has(cache_key):
                     with st.spinner("Вычисление метрик качества GMM (BIC) для определения оптимального числа компонентов..."):
                         try:
                             # Ограничиваем max_components для ускорения (5 вместо 10)
                             quality_df = analyzer.evaluate_gmm_quality(df_pca, max_components=5)
-                            st.session_state[cache_key] = quality_df
+                            safe_session_set(cache_key, quality_df)
                         except Exception as e:
                             st.warning(f"Не удалось оценить качество: {e}")
                             quality_df = pd.DataFrame()
                 else:
-                    quality_df = st.session_state[cache_key]
+                    quality_df = safe_session_get(cache_key)
                 
                 # Показываем результаты BIC для информации
                 optimal_components = 2  # Значение по умолчанию
@@ -2896,7 +3588,12 @@ def render_dashboard():
                             st.warning(f"Не удалось оценить качество: {e}")
                 
                 # GMM (опционально) - выполняется независимо от переобучения
-                use_gmm = st.checkbox("Использовать GMM для моделирования состояний", value=True)
+                # КРИТИЧНО: Используем key для стабильного значения checkbox
+                # Streamlit сам управляет значением через key, не нужно сохранять вручную
+                use_gmm_key = "use_gmm_spectral"
+                default_use_gmm = safe_session_get(use_gmm_key, True)
+                use_gmm = st.checkbox("Использовать GMM для моделирования состояний", value=default_use_gmm, key=use_gmm_key)
+                # Значение автоматически сохраняется Streamlit через key
                 if use_gmm:
                     # Определяем оптимальное число компонентов по BIC (если доступно)
                     default_n_components = optimal_components if not quality_df.empty else 2
@@ -2924,38 +3621,67 @@ def render_dashboard():
                     if analyzer.gmm is not None:
                         st.success(f"✅ GMM обучен с {analyzer.gmm.n_components} компонентами")
                     # Обновляем анализатор в session_state после обучения GMM
-                    st.session_state.analyzer = analyzer
+                    safe_session_set("analyzer", analyzer)
 
                 # Опция выбора метода классификации
-                use_gmm_classification = False
+                # КРИТИЧНО: Используем key для стабильного значения checkbox
+                # Streamlit сам управляет значением через key, не нужно сохранять вручную
+                use_gmm_classification_key = "use_gmm_classification"
                 if use_gmm and analyzer.gmm is not None:
+                    default_gmm_classification = safe_session_get(use_gmm_classification_key, False)
                     use_gmm_classification = st.checkbox(
                         "Использовать GMM компоненты для классификации образцов",
-                        value=False,
+                        value=default_gmm_classification,
+                        key=use_gmm_classification_key,
                         help="Если включено, образцы классифицируются по принадлежности к GMM компонентам. "
                              "Если выключено, используется фиксированное разделение на 4 категории (normal/mild/moderate/severe) "
                              "на основе позиции на спектральной шкале."
                     )
+                    # Значение автоматически сохраняется Streamlit через key
+                else:
+                    use_gmm_classification = False
+                    # Если GMM не используется, виджет не создан, поэтому можно установить значение напрямую
+                    # Но только если виджет еще не был создан ранее
+                    if not safe_session_has(use_gmm_classification_key):
+                        # Если виджет еще не создан, можно установить значение
+                        safe_session_set(use_gmm_classification_key, False)
                 
-                # Определяем ключ для кэширования спектра
-                spectrum_cache_key = f"spectrum_{use_gmm}_{use_gmm_classification}_{analyzer.gmm.n_components if analyzer.gmm is not None else 'no_gmm'}"
+                # ОПТИМИЗАЦИЯ: Используем стабильный ключ для кэширования спектра
+                # Определяем ключ для кэширования спектра на основе настроек GMM и спектральных настроек
+                gmm_n_components = analyzer.gmm.n_components if analyzer.gmm is not None else 0
+                spectrum_cache_key = f"spectrum_{spectral_settings_key}_{use_gmm}_{use_gmm_classification}_{gmm_n_components}"
                 
-                # Пересчитываем спектр если изменились настройки GMM или его нет в кэше
-                if (spectrum_cache_key not in st.session_state or 
-                    "df_spectrum" not in st.session_state or
-                    st.session_state.get("spectrum_cache_key") != spectrum_cache_key):
+                
+                # Пересчитываем спектр только если:
+                # 1. Его нет в кэше
+                # 2. Изменился ключ кэша (настройки GMM или спектральные настройки)
+                cached_spectrum_key = safe_session_get("spectrum_cache_key")
+                cached_df_spectrum = safe_session_get("df_spectrum")
+                
+                
+                need_recalculate_spectrum = (
+                    cached_df_spectrum is None or
+                    cached_spectrum_key != spectrum_cache_key
+                )
+                
+                    if need_recalculate_spectrum:
+                    else:
+                
+                if need_recalculate_spectrum:
+                        st.error(f"🔍 DEBUG: ⚠️ ПЕРЕСЧЕТ СПЕКТРА! Ключ: {spectrum_cache_key}, сохраненный ключ: {cached_spectrum_key}")
                     # Преобразование в спектральную шкалу
-                    df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)
+                    with st.spinner("Вычисление спектральной шкалы..."):
+                        df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=use_gmm_classification if use_gmm else False)
                     
                     # Сохраняем в session_state с ключом
-                    st.session_state.df_spectrum = df_spectrum
-                    st.session_state.spectrum_cache_key = spectrum_cache_key
+                    safe_session_set("df_spectrum", df_spectrum)
+                    safe_session_set("spectrum_cache_key", spectrum_cache_key)
                 else:
                     # Используем сохраненный спектр
-                    df_spectrum = st.session_state.df_spectrum
+                    df_spectrum = cached_df_spectrum
                 
                 # Обновляем анализатор в session_state (на случай если был обучен GMM)
-                st.session_state.analyzer = analyzer
+                safe_session_set("analyzer", analyzer)
 
                 # Информация о спектре
                 spectrum_info = analyzer.get_spectrum_info()
@@ -4154,12 +4880,24 @@ def render_dashboard():
             
             if len(df_features) > 0:
                 # Выбор образца для анализа
+                # КРИТИЧНО: Используем session_state для стабильного значения selectbox
+                # ВАЖНО: При изменении selectbox происходит rerun, и Streamlit может сбросить активную вкладку
+                # Это известное ограничение Streamlit - вкладки не сохраняют свое состояние при rerun от виджетов
+                # К сожалению, нет прямого способа программно сохранить активную вкладку
                 sample_names = df_features["image"].tolist()
+                selected_sample_key = "selected_sample_analysis"
+                default_sample = safe_session_get(selected_sample_key, sample_names[0] if sample_names else None)
+                if default_sample not in sample_names:
+                    default_sample = sample_names[0] if sample_names else None
+                
                 selected_sample = st.selectbox(
                     "Выберите образец для анализа",
                     sample_names,
+                    index=sample_names.index(default_sample) if default_sample and default_sample in sample_names else 0,
+                    key=selected_sample_key,
                     help="Выберите образец, который нужно проанализировать. Например, 9_ibd_mod_6mod"
                 )
+                # Значение автоматически сохраняется Streamlit через key - НЕ устанавливаем вручную!
                 
                 if selected_sample:
                     sample_data = df_features[df_features["image"] == selected_sample].iloc[0]
@@ -4227,15 +4965,15 @@ def render_dashboard():
                             
                             # Инициализируем session_state для исключенных признаков
                             exclude_key = f"exclude_features_{selected_sample}"
-                            if exclude_key not in st.session_state:
-                                st.session_state[exclude_key] = high_z_features[:3]
+                            if not safe_session_has(exclude_key):
+                                safe_session_set(exclude_key, high_z_features[:3])
                             
                             # Фильтруем сохраненные значения, чтобы они были только из доступных опций
-                            saved_excluded = st.session_state[exclude_key]
+                            saved_excluded = safe_session_get(exclude_key, [])
                             valid_excluded_default = [f for f in saved_excluded if f in numeric_cols]
                             if not valid_excluded_default and high_z_features:
                                 valid_excluded_default = high_z_features[:3]
-                                st.session_state[exclude_key] = valid_excluded_default
+                                safe_session_set(exclude_key, valid_excluded_default)
                             
                             st.info("💡 Выберите признаки, затем нажмите кнопку 'Применить исключение'.")
                             
@@ -4251,21 +4989,19 @@ def render_dashboard():
                                 
                                 submitted = st.form_submit_button("✅ Применить исключение", use_container_width=True)
                                 if submitted:
-                                    st.session_state[exclude_key] = features_to_exclude
+                                    safe_session_set(exclude_key, features_to_exclude)
                                     # Сохраняем в общий список исключенных признаков
-                                    if "excluded_features" not in st.session_state:
-                                        st.session_state.excluded_features = []
-                                    # Объединяем с существующими исключениями
-                                    current_excluded = set(st.session_state.excluded_features)
+                                    current_excluded = set(safe_session_get("excluded_features", []))
                                     current_excluded.update(features_to_exclude)
-                                    st.session_state.excluded_features = list(current_excluded)
-                                    st.session_state.selection_mode = "Исключить признаки (blacklist)"
+                                    safe_session_set("excluded_features", list(current_excluded))
+                                    safe_session_set("selection_mode", "Исключить признаки (blacklist)")
                                     st.success(f"✅ Признаки сохранены! Перейдите в раздел '🎯 Выбор признаков' для применения.")
                             
                             # Показываем текущий статус
-                            if st.session_state[exclude_key]:
+                            current_excluded_features = safe_session_get(exclude_key, [])
+                            if current_excluded_features:
                                 st.warning(
-                                    f"⚠️ Выбрано {len(st.session_state[exclude_key])} признаков для исключения: {', '.join(st.session_state[exclude_key][:5])}{'...' if len(st.session_state[exclude_key]) > 5 else ''}\n\n"
+                                    f"⚠️ Выбрано {len(current_excluded_features)} признаков для исключения: {', '.join(current_excluded_features[:5])}{'...' if len(current_excluded_features) > 5 else ''}\n\n"
                                     f"**Чтобы применить исключение:**\n"
                                     f"1. Нажмите кнопку 'Применить исключение' выше\n"
                                     f"2. Перейдите в раздел '🎯 Выбор признаков' в боковой панели\n"
@@ -4273,17 +5009,20 @@ def render_dashboard():
                                 )
                                 
                                 # Сохраняем в session state для удобства
-                                if "suggested_exclusions" not in st.session_state:
-                                    st.session_state.suggested_exclusions = []
-                                st.session_state.suggested_exclusions = st.session_state[exclude_key]
+                                safe_session_set("suggested_exclusions", current_excluded_features)
                     
                     # Если есть результаты спектрального анализа
-                    if "analyzer" in st.session_state and use_spectral_analysis:
+                    if safe_session_has("analyzer") and use_spectral_analysis:
                         st.subheader("🎯 Результаты спектрального анализа")
                         
-                        if "df_spectrum" in locals() or "df_spectrum" in st.session_state:
+                        # Безопасная проверка наличия df_spectrum в locals() или session_state
+                        if "df_spectrum" in locals():
+                            df_spectrum_val = locals()["df_spectrum"]
+                        else:
+                            df_spectrum_val = safe_session_get("df_spectrum")
+                        if df_spectrum_val is not None:
                             if "df_spectrum" not in locals():
-                                analyzer = st.session_state.analyzer
+                                analyzer = safe_session_get("analyzer")
                                 df_pca = analyzer.transform_pca(df_features)
                                 df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=False)
                             
@@ -4372,9 +5111,14 @@ def render_dashboard():
                     st.subheader("🔬 Сравнение с другими образцами")
                     
                     # Находим похожие образцы по PC1_spectrum
-                    if "df_spectrum" in locals() or "df_spectrum" in st.session_state:
+                    # Безопасная проверка наличия df_spectrum в locals() или session_state
+                    if "df_spectrum" in locals():
+                        df_spectrum_val = locals()["df_spectrum"]
+                    else:
+                        df_spectrum_val = safe_session_get("df_spectrum")
+                    if df_spectrum_val is not None:
                         if "df_spectrum" not in locals():
-                            analyzer = st.session_state.analyzer
+                            analyzer = safe_session_get("analyzer")
                             df_pca = analyzer.transform_pca(df_features)
                             df_spectrum = analyzer.transform_to_spectrum(df_pca)
                         
@@ -4474,9 +5218,14 @@ def render_dashboard():
                                 
                                 # Показываем таблицу сравнения всех образцов группы
                                 st.markdown("**📊 Сравнение всех образцов группы:**")
-                                if "df_spectrum" in locals() or "df_spectrum" in st.session_state:
+                                # Безопасная проверка наличия df_spectrum в locals() или session_state
+                                if "df_spectrum" in locals():
+                                    df_spectrum_val = locals()["df_spectrum"]
+                                else:
+                                    df_spectrum_val = safe_session_get("df_spectrum")
+                                if df_spectrum_val is not None:
                                     if "df_spectrum" not in locals():
-                                        analyzer = st.session_state.analyzer
+                                        analyzer = safe_session_get("analyzer")
                                         df_pca = analyzer.transform_pca(df_features)
                                         df_spectrum = analyzer.transform_to_spectrum(df_pca, use_gmm_classification=False)
                                     
@@ -4580,7 +5329,7 @@ def render_dashboard():
                                     )
                                     if removed:
                                         st.success(f"Удалено {len(removed)} признаков: {', '.join(removed)}")
-                                        st.session_state.df_results = df_cleaned
+                                        safe_session_set("df_results", df_cleaned)
                                         st.rerun()
                             else:
                                 st.info("Нет высоко коррелированных признаков")
@@ -4591,16 +5340,17 @@ def render_dashboard():
             st.markdown("Примените обученную модель к новым WSI из выбранной директории.")
                 
             # Проверяем, есть ли обученная модель
-            if "analyzer" not in st.session_state or st.session_state.get("analyzer") is None:
+            analyzer = safe_session_get("analyzer", None)
+            if analyzer is None:
                 # Пробуем загрузить модель из эксперимента, если используется эксперимент
-                if use_experiment_data and "experiment_dir" in st.session_state:
-                    experiment_dir = Path(st.session_state.experiment_dir)
+                if use_experiment_data and safe_session_has("experiment_dir"):
+                    experiment_dir = Path(safe_session_get("experiment_dir"))
                     model_path = experiment_dir / "spectral_analyzer.pkl"
                     if model_path.exists():
                         try:
                             analyzer = spectral_analysis.SpectralAnalyzer()
                             analyzer.load(model_path)
-                            st.session_state.analyzer = analyzer
+                            safe_session_set("analyzer", analyzer)
                             st.success(f"✅ Загружена модель из эксперимента: {experiment_dir.name}")
                             st.info(f"ℹ️ Модель использует {len(analyzer.feature_columns) if analyzer.feature_columns else 0} признаков")
                         except Exception as e:
@@ -4614,10 +5364,10 @@ def render_dashboard():
                     st.info("💡 Перейдите на вкладку '🔬 Спектральный анализ' и выполните анализ данных.")
                     analyzer = None
             else:
-                analyzer = st.session_state.analyzer
+                analyzer = safe_session_get("analyzer")
                 # Показываем информацию о модели
-                if use_experiment_data and "experiment_dir" in st.session_state:
-                    experiment_dir = Path(st.session_state.experiment_dir)
+                if use_experiment_data and safe_session_has("experiment_dir"):
+                    experiment_dir = Path(safe_session_get("experiment_dir"))
                     st.info(f"ℹ️ Используется модель из эксперимента: **{experiment_dir.name}**")
                 if analyzer.feature_columns:
                     st.caption(f"Модель обучена на {len(analyzer.feature_columns)} признаках")
@@ -4625,10 +5375,11 @@ def render_dashboard():
             if analyzer is None:
                 st.stop()
             
-            if "inference_dir" not in st.session_state or not Path(st.session_state.inference_dir).exists():
+            inference_dir_val = safe_session_get("inference_dir")
+            if not inference_dir_val or not Path(inference_dir_val).exists():
                 st.info("💡 Выберите директорию для инференса в боковой панели (секция '🔮 Инференс').")
             else:
-                inference_dir = Path(st.session_state.inference_dir)
+                inference_dir = Path(inference_dir_val)
                 json_files = list(inference_dir.glob("*.json"))
                 
                 if not json_files:
@@ -4650,19 +5401,21 @@ def render_dashboard():
                             use_relative_features_for_inference = False
                         else:
                             # Если смешанные, используем настройки из session_state
-                            use_relative_features_for_inference = st.session_state.get("settings", {}).get("use_relative_features", True)
+                            settings = safe_session_get("settings", {})
+                            use_relative_features_for_inference = settings.get("use_relative_features", True)
                             st.warning("⚠️ Модель использует смешанные признаки. Используются настройки из session_state.")
                     else:
                         # Если нет информации о признаках, используем настройки из session_state
-                        use_relative_features_for_inference = st.session_state.get("settings", {}).get("use_relative_features", True)
+                        settings = safe_session_get("settings", {})
+                        use_relative_features_for_inference = settings.get("use_relative_features", True)
                     
                     st.info(f"ℹ️ Тип признаков для инференса: **{'Относительные' if use_relative_features_for_inference else 'Абсолютные'}** (определено по модели)")
                     
                     # Ключ кэша для инференса
                     inference_cache_key = f"inference_{inference_dir}_{hash(str(sorted([f.name for f in json_files])))}"
                     
-                    if inference_cache_key in st.session_state:
-                        df_inference_spectrum = st.session_state[inference_cache_key]
+                    if safe_session_has(inference_cache_key):
+                        df_inference_spectrum = safe_session_get(inference_cache_key)
                         st.info(f"✅ Загружены результаты инференса для {len(df_inference_spectrum)} образцов (из кэша)")
                     else:
                         with st.spinner(f"Выполняется инференс для {len(json_files)} файлов..."):
@@ -4740,7 +5493,7 @@ def render_dashboard():
                                         )
                                         
                                         # Сохраняем в кэш
-                                        st.session_state[inference_cache_key] = df_inference_spectrum
+                                        safe_session_set(inference_cache_key, df_inference_spectrum)
                                         st.success(f"✅ Инференс выполнен для {len(df_inference_spectrum)} образцов")
                                     else:
                                         st.error("❌ Модель не содержит информацию о признаках")
@@ -4753,12 +5506,11 @@ def render_dashboard():
                                 df_inference_spectrum = None
                     
                     # Показываем результаты инференса
-                    df_inference_spectrum = st.session_state.get(inference_cache_key)
+                    df_inference_spectrum = safe_session_get(inference_cache_key)
                     if df_inference_spectrum is not None:
                         # Получаем обучающие данные для сравнения
-                        if "df_spectrum" in st.session_state:
-                            df_spectrum_train = st.session_state.df_spectrum
-                        else:
+                        df_spectrum_train = safe_session_get("df_spectrum")
+                        if df_spectrum_train is None:
                             df_spectrum_train = None
                         
                         # График с точками инференса
