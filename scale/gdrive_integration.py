@@ -7,10 +7,12 @@
 - Автоматическую авторизацию через OAuth 2.0
 """
 
+from __future__ import annotations
+
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional, TYPE_CHECKING, Any
 import io
 
 if TYPE_CHECKING:
@@ -26,7 +28,7 @@ try:
     GDRIVE_AVAILABLE = True
 except ImportError:
     GDRIVE_AVAILABLE = False
-    # Flow будет None если импорт не удался, но аннотация типа использует строку "Flow"
+    Flow = Any  # Для аннотаций типов, если библиотека недоступна
 
 
 # OAuth 2.0 Scopes для Google Drive
