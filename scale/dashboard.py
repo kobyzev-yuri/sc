@@ -54,7 +54,7 @@ from scale.dashboard_common import (
 )
 
 # Настройка логирования для отладки
-DEBUG_MODE = False  # Отключено для продакшена
+DEBUG_MODE = True  # Включено для отладки GCS/GDrive загрузки
 
 
 def create_experiment_dir(base_dir: Path = Path("experiments")) -> Path:
@@ -810,6 +810,16 @@ def render_dashboard():
 
     # Основная область
     predictions = None
+    
+    # ОТЛАДКА: Логируем состояние session state в начале рендера
+    if DEBUG_MODE or safe_session_get("debug_mode", False):
+        st.sidebar.write("---")
+        st.sidebar.write("🔍 [DEBUG] Состояние session state:")
+        st.sidebar.write(f"  - predictions_cloud: {safe_session_get('predictions_cloud', 'НЕТ')}")
+        st.sidebar.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
+        st.sidebar.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
+        if safe_session_get('predictions_cloud', None):
+            st.sidebar.write(f"  - Ключи predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:3]}")
 
     # Загрузка данных с кэшированием
     if use_default_data:
@@ -873,9 +883,24 @@ def render_dashboard():
     # ВАЖНО: Проверяем, есть ли загруженные данные из GCS/GDrive ПЕРЕД проверкой других источников
     # Это нужно для случая, когда данные загружены, но источник не выбран в селекторе
     # Приоритет: если данные загружены из cloud storage, используем их в первую очередь
+    st.write("🔍 [DEBUG] Проверка predictions перед cloud fallback:")
+    st.write(f"  - predictions: {predictions is not None}, len: {len(predictions) if predictions else 0}")
+    st.write(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
+    st.write(f"  - use_gdrive_data: {use_gdrive_data}")
+    
     if not predictions or len(predictions) == 0:
         cloud_predictions = safe_session_get("predictions_cloud", None)
+        
+        st.write("🔍 [DEBUG] Проверка cloud_predictions:")
+        st.write(f"  - cloud_predictions is not None: {cloud_predictions is not None}")
+        if cloud_predictions:
+            st.write(f"  - Тип cloud_predictions: {type(cloud_predictions)}")
+            st.write(f"  - Длина cloud_predictions: {len(cloud_predictions) if hasattr(cloud_predictions, '__len__') else 'N/A'}")
+            if isinstance(cloud_predictions, dict):
+                st.write(f"  - Ключи cloud_predictions: {list(cloud_predictions.keys())[:3]}")
+        
         if cloud_predictions and len(cloud_predictions) > 0:
+            st.write("🔍 [DEBUG] ✅ Использую cloud_predictions!")
             predictions = cloud_predictions
             # Убеждаемся, что флаги установлены правильно
             safe_session_set("use_cloud_storage", True)
@@ -886,6 +911,8 @@ def render_dashboard():
                     safe_session_set("data_source", "Google Cloud Storage (GCS)")
                 elif GDRIVE_ENABLED:
                     safe_session_set("data_source", "Google Drive")
+        else:
+            st.write("🔍 [DEBUG] ❌ cloud_predictions пусто или None")
 
     elif uploaded_files:
         # Для загруженных файлов используем хэш имен файлов как ключ кэша
@@ -1285,6 +1312,16 @@ def render_dashboard():
         # Для обычной загрузки проверяем predictions или session_state
         has_data = (predictions is not None and len(predictions) > 0) or \
                    (safe_session_has("df") and safe_session_get("df") is not None)
+        
+        # ОТЛАДКА: Логируем проверку has_data
+        st.write("🔍 [DEBUG] Проверка has_data:")
+        st.write(f"  - predictions is not None: {predictions is not None}")
+        st.write(f"  - len(predictions): {len(predictions) if predictions else 0}")
+        st.write(f"  - safe_session_has('df'): {safe_session_has('df')}")
+        st.write(f"  - has_data: {has_data}")
+        st.write(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
+        st.write(f"  - use_gdrive_data: {use_gdrive_data}")
+        st.write(f"  - data_source: {data_source}")
     
     # Создаем вкладки только если есть данные
     if has_data:
