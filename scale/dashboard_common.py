@@ -745,9 +745,18 @@ def _render_gdrive_load() -> tuple:
                     if safe_session_get('predictions_cloud', None):
                         st.write(f"  - Ключи в predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:5]}")
                     
-                    st.write("🔍 [DEBUG GDRIVE] Вызываю st.rerun()...")
-                    # Вызываем rerun для обновления интерфейса
-                    st.rerun()
+                    # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
+                    # Это предотвращает бесконечный цикл rerun
+                    last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
+                    current_hash = hash(str(sorted(predictions_converted.keys())))
+                    
+                    if last_loaded_hash != current_hash:
+                        # Это новые данные - вызываем rerun
+                        safe_session_set("gdrive_last_loaded_hash", current_hash)
+                        st.write("🔍 [DEBUG GDRIVE] Вызываю st.rerun() для новых данных...")
+                        st.rerun()
+                    else:
+                        st.write("🔍 [DEBUG GDRIVE] Данные уже загружены, пропускаю rerun")
                 except Exception as e:
                     st.error(f"Ошибка при обработке данных из Google Drive: {e}")
                 return drive_folder_url, predictions
