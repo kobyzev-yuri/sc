@@ -745,16 +745,29 @@ def _render_gdrive_load() -> tuple:
                     if safe_session_get('predictions_cloud', None):
                         st.write(f"  - Ключи в predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:5]}")
                     
+                    # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
+                    # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
+                    safe_session_set("predictions_cloud", predictions_converted)
+                    safe_session_set("use_cloud_storage", True)
+                    if GDRIVE_ENABLED:
+                        safe_session_set("data_source", "Google Drive")
+                    elif GCS_ENABLED:
+                        safe_session_set("data_source", "Google Cloud Storage (GCS)")
+                    
+                    st.write("🔍 [DEBUG GDRIVE] Данные сохранены в session state:")
+                    st.write(f"  - Количество файлов: {len(predictions_converted)}")
+                    
                     # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
-                    # Это предотвращает бесконечный цикл rerun
                     last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
                     current_hash = hash(str(sorted(predictions_converted.keys())))
                     
                     if last_loaded_hash != current_hash:
-                        # Это новые данные - вызываем rerun
                         safe_session_set("gdrive_last_loaded_hash", current_hash)
-                        st.write("🔍 [DEBUG GDRIVE] Вызываю st.rerun() для новых данных...")
-                        st.rerun()
+                        st.write("🔍 [DEBUG GDRIVE] Вызываю st.rerun()...")
+                        try:
+                            st.rerun()
+                        except:
+                            st.experimental_rerun()
                     else:
                         st.write("🔍 [DEBUG GDRIVE] Данные уже загружены, пропускаю rerun")
                 except Exception as e:
@@ -870,58 +883,64 @@ def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
     
     if predictions:
         st.success(f"✅ Загружено {len(predictions)} файлов из GCS bucket")
-        # Сохраняем predictions в session state для использования в dashboard
-        # Конвертируем в формат domain.predictions_from_dict
+        
+        # КРИТИЧНО: Сохраняем данные СРАЗУ, до конвертации и любых других операций
+        # Это гарантирует, что данные будут в session state даже если произойдет ошибка
         try:
             from scale import domain
             predictions_converted = {}
+            
+            # Конвертируем данные
+            st.write("🔄 Конвертация данных...")
             for name, data in predictions.items():
-                predictions_converted[name] = domain.predictions_from_dict(data)
+                try:
+                    predictions_converted[name] = domain.predictions_from_dict(data)
+                except Exception as e:
+                    st.warning(f"⚠️ Ошибка при конвертации {name}: {e}")
+                    # Сохраняем сырые данные, если конвертация не удалась
+                    predictions_converted[name] = data
             
-            # ОТЛАДКА: Логируем состояние ДО сохранения
-            st.write("🔍 [DEBUG GCS] Состояние ДО сохранения:")
-            st.write(f"  - predictions_cloud в session: {safe_session_get('predictions_cloud', 'НЕТ')}")
-            st.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
-            st.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
-            st.write(f"  - Количество конвертированных predictions: {len(predictions_converted)}")
-            
+            # КРИТИЧНО: Сохраняем данные в session state ПЕРЕД любыми st.write()
             safe_session_set("predictions_cloud", predictions_converted)
-            # Устанавливаем флаг использования cloud storage
             safe_session_set("use_cloud_storage", True)
-            # Устанавливаем источник данных в селекторе
             if GCS_ENABLED:
                 safe_session_set("data_source", "Google Cloud Storage (GCS)")
             elif GDRIVE_ENABLED:
                 safe_session_set("data_source", "Google Drive / GCS")
             
-            # ОТЛАДКА: Логируем состояние ПОСЛЕ сохранения
-            st.write("🔍 [DEBUG GCS] Состояние ПОСЛЕ сохранения:")
-            st.write(f"  - predictions_cloud в session: {safe_session_get('predictions_cloud', 'НЕТ')}")
-            st.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
-            st.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
-            st.write(f"  - Тип predictions_cloud: {type(safe_session_get('predictions_cloud', None))}")
-            if safe_session_get('predictions_cloud', None):
-                st.write(f"  - Ключи в predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:5]}")
+            # Проверяем, что данные действительно сохранены
+            saved_predictions = safe_session_get("predictions_cloud", None)
+            if saved_predictions:
+                st.success(f"✅ Данные сохранены в session state: {len(saved_predictions)} файлов")
+                st.write(f"🔍 [DEBUG GCS] Первые ключи: {list(saved_predictions.keys())[:3]}")
+            else:
+                st.error("❌ ОШИБКА: Данные не сохранились в session state!")
             
-            # Устанавливаем флаг, что данные только что загружены - это заставит dashboard использовать их
-            safe_session_set("gcs_data_just_loaded", True)
-            # Принудительно устанавливаем флаги для использования данных
-            safe_session_set("use_cloud_storage", True)
-            
-            # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
-            # Это предотвращает бесконечный цикл rerun
+            # КРИТИЧНО: Проверяем хеш перед rerun
             last_loaded_hash = safe_session_get("gcs_last_loaded_hash", None)
             current_hash = hash(str(sorted(predictions_converted.keys())))
             
             if last_loaded_hash != current_hash:
-                # Это новые данные - вызываем rerun
                 safe_session_set("gcs_last_loaded_hash", current_hash)
-                st.write("🔍 [DEBUG GCS] Вызываю st.rerun() для новых данных...")
+                st.write("🔄 Обновляю интерфейс...")
+                # Небольшая задержка перед rerun, чтобы убедиться, что данные сохранены
+                import time
+                time.sleep(0.1)  # Минимальная задержка для сохранения состояния
                 st.rerun()
             else:
-                st.write("🔍 [DEBUG GCS] Данные уже загружены, пропускаю rerun")
+                st.info("ℹ️ Данные уже загружены ранее")
+                
         except Exception as e:
-            st.error(f"Ошибка при обработке данных из GCS: {e}")
+            st.error(f"❌ Ошибка при обработке данных из GCS: {e}")
+            import traceback
+            st.error(f"Traceback: {traceback.format_exc()}")
+            # Пытаемся сохранить сырые данные хотя бы
+            try:
+                safe_session_set("predictions_cloud", predictions)
+                safe_session_set("use_cloud_storage", True)
+                st.warning("⚠️ Сохранены сырые данные без конвертации")
+            except:
+                pass
         return f"gcs://{bucket_name}/{prefix}", predictions
     else:
         st.warning("⚠️ Не найдено JSON файлов в указанном bucket/prefix")
