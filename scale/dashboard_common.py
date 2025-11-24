@@ -625,17 +625,20 @@ def render_gdrive_load_section() -> tuple:
         except ValueError:
             default_index = 0
     
-    # Используем уникальный ключ на основе текущего времени и случайного числа
-    # чтобы избежать конфликтов при множественных вызовах
-    import time
-    import random
-    unique_key = f"gdrive_gcs_source_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+    # Используем фиксированный ключ, но проверяем session state
+    # Если значение уже есть в session state, используем его
+    saved_source = safe_session_get("gdrive_gcs_source_selected", None)
+    if saved_source and saved_source in source_options:
+        default_index = source_options.index(saved_source)
+    
     data_source = st.radio(
         "Источник данных",
         source_options,
         index=default_index,
-        key=unique_key
+        key="gdrive_gcs_source_radio"  # Фиксированный ключ
     )
+    # Сохраняем выбранное значение в session state
+    safe_session_set("gdrive_gcs_source_selected", data_source)
     
     st.markdown("---")
     
