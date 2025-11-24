@@ -32,110 +32,29 @@ try:
     matplotlib.use("Agg")  # Для работы без GUI
 except ImportError as e:
     raise ImportError(
-        f"Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib"
+        f"Требуются зависимости для дашборда."
     ) from e
 
 from scale import aggregate, spectral_analysis, domain, scale_comparison, pca_scoring, preprocessing, eda
 from model_development.feature_selection_automated import evaluate_feature_set, identify_sample_type
 
+# Импорт общих функций из dashboard_common для синхронизации с dashboard_minimal.py
+from scale.dashboard_common import (
+    safe_session_get,
+    safe_session_set,
+    safe_session_del,
+    safe_session_has,
+    load_predictions_from_upload,
+    load_predictions_from_files,
+    load_predictions_from_gdrive,
+    render_gdrive_upload_section,
+    render_gdrive_load_section,
+    GDRIVE_ENABLED,
+    GCS_ENABLED,
+)
+
 # Настройка логирования для отладки
 DEBUG_MODE = False  # Отключено для продакшена
-
-def safe_session_get(key, default=None):
-    """Безопасное получение значения из session_state."""
-    try:
-        # Проверяем, что session_state инициализирован
-        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
-        if not hasattr(st, 'session_state'):
-            return default
-        try:
-            # Пытаемся получить доступ к session_state
-            _ = st.session_state
-        except (RuntimeError, AttributeError):
-            return default
-        return st.session_state.get(key, default)
-    except (RuntimeError, AttributeError, KeyError, TypeError) as e:
-        if DEBUG_MODE:
-            # Не используем st.warning здесь, так как st может быть не инициализирован
-            print(f"⚠️ DEBUG: Ошибка доступа к session_state['{key}']: {e}")
-        return default
-
-def safe_session_set(key, value):
-    """Безопасная установка значения в session_state."""
-    try:
-        # Проверяем, что session_state инициализирован
-        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
-        if not hasattr(st, 'session_state'):
-            if DEBUG_MODE:
-                print(f"⚠️ DEBUG: session_state не инициализирован, пропускаем установку '{key}'")
-            return
-        try:
-            # Пытаемся получить доступ к session_state
-            _ = st.session_state
-        except (RuntimeError, AttributeError):
-            if DEBUG_MODE:
-                print(f"⚠️ DEBUG: session_state не инициализирован, пропускаем установку '{key}'")
-            return
-        st.session_state[key] = value
-    except (RuntimeError, AttributeError, TypeError) as e:
-        if DEBUG_MODE:
-            print(f"⚠️ DEBUG: Ошибка установки session_state['{key}']: {e}")
-
-def safe_session_del(key):
-    """Безопасное удаление ключа из session_state."""
-    try:
-        # Проверяем, что session_state инициализирован
-        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
-        if not hasattr(st, 'session_state'):
-            return
-        try:
-            # Пытаемся получить доступ к session_state
-            _ = st.session_state
-        except (RuntimeError, AttributeError):
-            return
-        if key in st.session_state:
-            del st.session_state[key]
-    except (RuntimeError, AttributeError, KeyError, TypeError):
-        pass
-
-def safe_session_has(key):
-    """Безопасная проверка наличия ключа в session_state."""
-    try:
-        # Проверяем, что session_state инициализирован
-        # Используем более надежную проверку для предотвращения ошибки "SessionInfo before it was initialized"
-        if not hasattr(st, 'session_state'):
-            return False
-        try:
-            # Пытаемся получить доступ к session_state
-            _ = st.session_state
-        except (RuntimeError, AttributeError):
-            return False
-        return key in st.session_state
-    except (RuntimeError, AttributeError, TypeError):
-        return False
-
-
-def load_predictions_from_upload(uploaded_files) -> dict[str, dict]:
-    """
-    Загружает предсказания из загруженных файлов.
-
-    Args:
-        uploaded_files: Список загруженных файлов (Streamlit UploadedFile)
-
-    Returns:
-        Словарь {image_name: predictions_dict}
-    """
-    predictions = {}
-
-    for uploaded_file in uploaded_files:
-        try:
-            data = json.load(uploaded_file)
-            image_name = Path(uploaded_file.name).stem
-            predictions[image_name] = domain.predictions_from_dict(data)
-        except Exception as e:
-            st.error(f"Ошибка при загрузке {uploaded_file.name}: {e}")
-
-    return predictions
 
 
 def create_experiment_dir(base_dir: Path = Path("experiments")) -> Path:
@@ -273,9 +192,6 @@ def render_dashboard():
 
     st.title("🔬 Анализ патологий Whole Slide Images")
     st.markdown("---")
-
-    # Проверка checkbox'ов больше не используется для пропуска операций
-    # Все операции выполняются нормально при изменении checkbox'ов
     
     # Боковая панель для загрузки файлов
     with st.sidebar:
@@ -285,20 +201,91 @@ def render_dashboard():
         # Безопасная проверка session_state для предотвращения ошибки инициализации
         use_dir = safe_session_get("use_directory", False)
         use_exp = safe_session_get("use_experiment", False)
-        default_index = 1 if use_dir else (2 if use_exp else 0)
+        use_gdrive = safe_session_get("use_gdrive", False)
+        
+        # Формируем список опций
+        data_source_options = ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"]
+        if GDRIVE_ENABLED or GCS_ENABLED:
+            # Если доступен хотя бы один из источников, добавляем опцию
+            if GDRIVE_ENABLED and GCS_ENABLED:
+                data_source_options.append("Google Drive / GCS")
+            elif GDRIVE_ENABLED:
+                data_source_options.append("Google Drive")
+            elif GCS_ENABLED:
+                data_source_options.append("Google Cloud Storage (GCS)")
+        
+        # Определяем индекс по умолчанию
+        use_cloud_storage = safe_session_get("use_cloud_storage", False)
+        # Проверяем, установлен ли data_source из session state (после загрузки из GCS/GDrive)
+        saved_data_source = safe_session_get("data_source", None)
+        # Если есть загруженные данные из cloud storage, приоритетно используем их
+        if use_cloud_storage and safe_session_get("predictions_cloud", None):
+            if saved_data_source and saved_data_source in data_source_options:
+                # Используем сохраненный data_source
+                pass  # уже установлен
+            elif GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
+                saved_data_source = "Google Cloud Storage (GCS)"
+                safe_session_set("data_source", saved_data_source)
+            elif GDRIVE_ENABLED and "Google Drive" in data_source_options:
+                saved_data_source = "Google Drive"
+                safe_session_set("data_source", saved_data_source)
+            elif GDRIVE_ENABLED and "Google Drive / GCS" in data_source_options:
+                saved_data_source = "Google Drive / GCS"
+                safe_session_set("data_source", saved_data_source)
+        
+        if saved_data_source and saved_data_source in data_source_options:
+            # Используем сохраненный data_source
+            default_index = data_source_options.index(saved_data_source)
+        elif (use_gdrive or use_cloud_storage) and (GDRIVE_ENABLED or GCS_ENABLED):
+            # Находим индекс для cloud storage опции
+            if "Google Cloud Storage (GCS)" in data_source_options:
+                default_index = data_source_options.index("Google Cloud Storage (GCS)")
+            elif "Google Drive / GCS" in data_source_options:
+                default_index = data_source_options.index("Google Drive / GCS")
+            elif "Google Drive" in data_source_options:
+                default_index = data_source_options.index("Google Drive")
+            else:
+                default_index = len(data_source_options) - 1
+        elif use_exp:
+            default_index = 2
+        elif use_dir:
+            default_index = 1
+        else:
+            default_index = 0
         
         data_source = st.radio(
             "Источник данных",
-            ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"],
-            index=default_index
+            data_source_options,
+            index=default_index,
+            key="data_source_selector"  # Добавляем key для стабильности
         )
+        
+        # Сохраняем выбранный data_source в session state
+        safe_session_set("data_source", data_source)
         
         use_default_data = (data_source == "Использовать директорию")
         use_experiment_data = (data_source == "Использовать данные из эксперимента")
+        use_gdrive_data = (data_source == "Google Drive") and GDRIVE_ENABLED
+        use_cloud_storage_data = (data_source == "Google Drive / GCS" or data_source == "Google Cloud Storage (GCS)") and (GDRIVE_ENABLED or GCS_ENABLED)
+        
+        # КРИТИЧНО: Если в session state установлен флаг use_cloud_storage и есть данные,
+        # принудительно используем cloud storage независимо от выбора в селекторе
+        if safe_session_get("use_cloud_storage", False) and safe_session_get("predictions_cloud", None):
+            use_cloud_storage_data = True
+            # Принудительно устанавливаем правильный data_source
+            if data_source not in ["Google Drive / GCS", "Google Cloud Storage (GCS)"]:
+                if GCS_ENABLED:
+                    data_source = "Google Cloud Storage (GCS)"
+                    safe_session_set("data_source", data_source)
+                elif GDRIVE_ENABLED:
+                    data_source = "Google Drive / GCS"
+                    safe_session_set("data_source", data_source)
         
         # Безопасное сохранение в session_state
         safe_session_set("use_directory", use_default_data)
         safe_session_set("use_experiment", use_experiment_data)
+        safe_session_set("use_gdrive", use_gdrive_data)
+        safe_session_set("use_cloud_storage", use_cloud_storage_data)
 
         if use_default_data:
             # Предустановленные директории
@@ -527,7 +514,7 @@ def render_dashboard():
                 use_experiment_data = False
 
         uploaded_files = None
-        if not use_default_data and not use_experiment_data:
+        if not use_default_data and not use_experiment_data and not use_gdrive_data and not use_cloud_storage_data:
             # Выбор директории для загрузки файлов
             st.subheader("📁 Выбор директории для загрузки")
             
@@ -593,6 +580,17 @@ def render_dashboard():
                     safe_session_set("predictions_dir", str(upload_dir))
                     safe_session_set("use_directory", True)
                     st.rerun()
+        
+        elif use_gdrive_data or use_cloud_storage_data:
+            # Используем общую функцию для загрузки из Google Drive или GCS
+            # Данные уже обрабатываются и сохраняются в session state внутри render_gdrive_load_section
+            # Поэтому просто вызываем функцию - она сама обработает данные и вызовет rerun при необходимости
+            source_info, cloud_predictions = render_gdrive_load_section()
+            # Данные уже сохранены в session state внутри render_gdrive_load_section
+            # Не нужно обрабатывать их здесь, чтобы избежать дублирования
+        
+        elif (data_source == "Google Drive" or data_source == "Google Drive / GCS" or data_source == "Google Cloud Storage (GCS)") and not GDRIVE_ENABLED and not GCS_ENABLED:
+            st.error("❌ Интеграция с облачным хранилищем недоступна")
 
         st.markdown("---")
 
@@ -855,6 +853,39 @@ def render_dashboard():
                     # Сохраняем в кэш
                     safe_session_set(predictions_cache_key, predictions)
                     safe_session_set("predictions_dir_cache", str(predictions_dir))
+    
+    elif use_gdrive_data:
+        # Загрузка из Google Drive
+        gdrive_predictions = safe_session_get("predictions_gdrive", None)
+        if gdrive_predictions:
+            predictions = gdrive_predictions
+            # Сохраняем в кэш
+            safe_session_set("predictions_gdrive_cache", predictions)
+    
+    elif use_cloud_storage_data:
+        # Загрузка из Google Drive или GCS (через render_gdrive_load_section)
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions:
+            predictions = cloud_predictions
+            # Сохраняем в кэш для использования ниже
+            safe_session_set("predictions_cloud_cache", predictions)
+    
+    # ВАЖНО: Проверяем, есть ли загруженные данные из GCS/GDrive ПЕРЕД проверкой других источников
+    # Это нужно для случая, когда данные загружены, но источник не выбран в селекторе
+    # Приоритет: если данные загружены из cloud storage, используем их в первую очередь
+    if not predictions or len(predictions) == 0:
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions and len(cloud_predictions) > 0:
+            predictions = cloud_predictions
+            # Убеждаемся, что флаги установлены правильно
+            safe_session_set("use_cloud_storage", True)
+            # Устанавливаем data_source, если он еще не установлен
+            current_data_source = safe_session_get("data_source", None)
+            if current_data_source not in ["Google Drive", "Google Drive / GCS", "Google Cloud Storage (GCS)"]:
+                if GCS_ENABLED:
+                    safe_session_set("data_source", "Google Cloud Storage (GCS)")
+                elif GDRIVE_ENABLED:
+                    safe_session_set("data_source", "Google Drive")
 
     elif uploaded_files:
         # Для загруженных файлов используем хэш имен файлов как ключ кэша
@@ -886,11 +917,9 @@ def render_dashboard():
         )
         
         # Ищем файлы с данными
-        if True:
-            # Ищем последние файлы с данными
-            aggregated_files = sorted(experiment_dir.glob("aggregated_data_*.csv"))
-            relative_files = sorted(experiment_dir.glob("relative_features_*.csv"))
-            all_features_files = sorted(experiment_dir.glob("all_features_*.csv"))
+        aggregated_files = sorted(experiment_dir.glob("aggregated_data_*.csv"))
+        relative_files = sorted(experiment_dir.glob("relative_features_*.csv"))
+        all_features_files = sorted(experiment_dir.glob("all_features_*.csv"))
         
         # Если эксперимент изменился, очищаем кэш
         if experiment_changed:
@@ -1348,13 +1377,11 @@ def render_dashboard():
             st.header("🎯 Выбор признаков для анализа")
             st.markdown("Выберите признаки для построения шкалы патологии. PCA автоматически пересчитывается при загрузке данных. Кнопка 'Применить признаки' появится только при изменении признаков.")
             
-            # ВРЕМЕННО: Расчет текущего score для сравнения с экспериментальным
+            # Расчет текущего score для сравнения с экспериментальным
             # Пересчет score
-            if True:
-                # Получаем текущие выбранные признаки и вычисляем score
-                current_selected_for_score = safe_session_get("selected_features", [])
-                
-                # КРИТИЧНО: Используем данные из эксперимента, если они загружены
+            current_selected_for_score = safe_session_get("selected_features", [])
+            if current_selected_for_score:
+                # Используем данные из эксперимента, если они загружены
                 # Иначе используем данные из загруженных файлов
                 df_features_for_score = None
                 if use_experiment_data:

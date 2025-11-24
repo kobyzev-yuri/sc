@@ -1,0 +1,70 @@
+# Основные зависимости для проекта кластерного анализа патологических данных
+
+# Базовые библиотеки для работы с данными
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Машинное обучение и анализ данных
+scikit-learn>=1.2.0
+
+# Кластеризация
+hdbscan>=0.8.29
+
+# Dimensionality reduction и визуализация
+umap-learn>=0.5.3
+
+# Визуализация
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Статистика
+scipy>=1.10.0
+
+# Веб-дашборд
+streamlit>=1.28.0
+
+# Обработка изображений (для WSI)
+opencv-python>=4.7.0
+Pillow>=9.5.0
+
+# YOLO модели (для детекции патологий)
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# TensorRT оптимизация (опционально, для ускорения инференса на NVIDIA GPU)
+# Для использования TensorRT необходимо установить:
+# 1. CUDA Toolkit (совместимую версию с вашей GPU)
+# 2. TensorRT (через pip: nvidia-tensorrt или через NVIDIA package manager)
+# 3. Убедиться что версии CUDA, PyTorch и TensorRT совместимы
+# 
+# Пример установки TensorRT через pip (может не работать на всех системах):
+# pip install nvidia-tensorrt
+#
+# Или через NVIDIA package manager (рекомендуется):
+# https://developer.nvidia.com/tensorrt
+#
+# После установки TensorRT, используйте convert_to_tensorrt.py для конвертации моделей
+
+# Геометрические операции
+shapely>=2.0.0
+
+# Опциональные зависимости (для расширенного функционала)
+
+# Для supervised regression (опционально)
+# lightgbm>=4.0.0
+
+# Для интерпретации через SHAP (опционально)
+# shap>=0.42.0
+
+# Для работы с большими изображениями (опционально, если используется cucim)
+# cucim>=23.0.0
+
+# Google Cloud Storage (для загрузки данных из GCS bucket)
+google-cloud-storage>=2.10.0
+
+# Google Drive API (для интеграции с Google Drive)
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+
