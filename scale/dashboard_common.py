@@ -592,9 +592,16 @@ def render_gdrive_load_section() -> tuple:
     if not st:
         return None, {}
     
-    # КРИТИЧНО: Проверяем, не рендерится ли уже эта секция
-    # Используем флаг в session state, чтобы избежать множественных вызовов
-    render_key = "gdrive_load_section_rendered"
+    # КРИТИЧНО: Используем уникальный ключ для виджета на основе call stack
+    # Это предотвращает конфликты при множественных вызовах
+    import inspect
+    frame = inspect.currentframe()
+    caller_info = ""
+    if frame and frame.f_back:
+        caller_info = f"_{frame.f_back.f_lineno}"
+    
+    # Проверяем, не рендерится ли уже эта секция
+    render_key = f"gdrive_load_section_rendered{caller_info}"
     if safe_session_get(render_key, False):
         # Уже рендерится - возвращаем данные из session state если есть
         existing_predictions = safe_session_get("predictions_cloud", None)
@@ -647,11 +654,13 @@ def render_gdrive_load_section() -> tuple:
         if saved_source and saved_source in source_options:
             default_index = source_options.index(saved_source)
         
+        # Используем уникальный ключ на основе caller_info
+        radio_key = f"gdrive_gcs_source_radio{caller_info}"
         data_source = st.radio(
             "Источник данных",
             source_options,
             index=default_index,
-            key="gdrive_gcs_source_radio"  # Фиксированный ключ
+            key=radio_key  # Уникальный ключ
         )
         # Сохраняем выбранное значение в session state
         safe_session_set("gdrive_gcs_source_selected", data_source)
