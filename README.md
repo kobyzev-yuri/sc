@@ -39,13 +39,11 @@
   - И другие (Cell 12 output)
 
 ✅ **Реализовано дополнительно:**
-- ✅ Кластеризация (HDBSCAN, Agglomerative, KMeans) - `scale/clustering.py`
 - ✅ Препроцессинг данных (анализ корреляций, удаление избыточных признаков) - `scale/preprocessing.py`
 - ✅ EDA (визуализации, корреляции, UMAP, статистические тесты) - `scale/eda.py`
-- ✅ Кластерный маппинг на шкалу 0-1 - `scale/cluster_scoring.py`
-- ✅ Сравнение нескольких кластеризаций - `scale/cluster_comparison.py`
-- ✅ Сравнение разных методов построения шкалы (PCA/Spectral/Cluster) - `scale/method_comparison.py`
 - ✅ Веб-дашборд с полной интеграцией всех методов - `scale/dashboard.py`
+
+**Примечание:** Модули кластеризации (clustering, cluster_scoring, cluster_comparison, method_comparison) были перемещены в `archive/clustering_modules/` так как не используются в dashboard для deployment.
 
 ❌ **Не реализовано (опционально):**
 - Anomaly Detection для построения шкалы
