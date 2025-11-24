@@ -611,88 +611,90 @@ def render_gdrive_load_section() -> tuple:
     
     # Устанавливаем флаг, что секция рендерится
     safe_session_set(render_key, True)
-        st.info("📌 **Важно:** Файлы в Cloud Run пропадают при перезапуске. Используйте Google Drive или GCS для постоянного хранения.")
-        
-        # Выбор источника данных
-        source_options = []
+    
+    st.info("📌 **Важно:** Файлы в Cloud Run пропадают при перезапуске. Используйте Google Drive или GCS для постоянного хранения.")
+    
+    # Выбор источника данных
+    source_options = []
+    if GDRIVE_ENABLED:
+        source_options.append("Google Drive")
+    if GCS_ENABLED:
+        source_options.append("Google Cloud Storage (GCS)")
+    
+    if not source_options:
+        st.warning("⚠️ Ни Google Drive, ни GCS не доступны.")
+        safe_session_set(render_key, False)
+        return None, {}
+    
+    # Если доступен только один источник, используем его напрямую
+    if len(source_options) == 1:
+        if source_options[0] == "Google Drive" and GDRIVE_ENABLED:
+            result = _render_gdrive_load()
+            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+            return result
+        elif source_options[0] == "Google Cloud Storage (GCS)" and GCS_ENABLED:
+            result = _render_gcs_load()
+            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+            return result
+    
+    # Если доступны оба источника, показываем выбор
+    st.markdown("---")
+    st.subheader("🌐 Выберите источник данных")
+    
+    # Определяем индекс по умолчанию (предпочитаем GCS если доступен)
+    default_index = 0
+    if GCS_ENABLED and len(source_options) > 1:
+        # Если GCS доступен и есть выбор, выбираем GCS по умолчанию
+        try:
+            default_index = source_options.index("Google Cloud Storage (GCS)")
+        except ValueError:
+            default_index = 0
+    
+    # Используем фиксированный ключ, но проверяем session state
+    # Если значение уже есть в session state, используем его
+    saved_source = safe_session_get("gdrive_gcs_source_selected", None)
+    if saved_source and saved_source in source_options:
+        default_index = source_options.index(saved_source)
+    
+    # Используем уникальный ключ на основе caller_info
+    radio_key = f"gdrive_gcs_source_radio{caller_info}"
+    data_source = st.radio(
+        "Источник данных",
+        source_options,
+        index=default_index,
+        key=radio_key  # Уникальный ключ
+    )
+    # Сохраняем выбранное значение в session state
+    safe_session_set("gdrive_gcs_source_selected", data_source)
+    
+    st.markdown("---")
+    
+    # Обрабатываем выбор источника
+    if data_source == "Google Drive":
         if GDRIVE_ENABLED:
-            source_options.append("Google Drive")
-        if GCS_ENABLED:
-            source_options.append("Google Cloud Storage (GCS)")
-        
-        if not source_options:
-            st.warning("⚠️ Ни Google Drive, ни GCS не доступны.")
-            return None, {}
-        
-        # Если доступен только один источник, используем его напрямую
-        if len(source_options) == 1:
-            if source_options[0] == "Google Drive" and GDRIVE_ENABLED:
-                result = _render_gdrive_load()
-                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-                return result
-            elif source_options[0] == "Google Cloud Storage (GCS)" and GCS_ENABLED:
-                result = _render_gcs_load()
-                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-                return result
-        
-        # Если доступны оба источника, показываем выбор
-        st.markdown("---")
-        st.subheader("🌐 Выберите источник данных")
-        
-        # Определяем индекс по умолчанию (предпочитаем GCS если доступен)
-        default_index = 0
-        if GCS_ENABLED and len(source_options) > 1:
-            # Если GCS доступен и есть выбор, выбираем GCS по умолчанию
-            try:
-                default_index = source_options.index("Google Cloud Storage (GCS)")
-            except ValueError:
-                default_index = 0
-        
-        # Используем фиксированный ключ, но проверяем session state
-        # Если значение уже есть в session state, используем его
-        saved_source = safe_session_get("gdrive_gcs_source_selected", None)
-        if saved_source and saved_source in source_options:
-            default_index = source_options.index(saved_source)
-        
-        # Используем уникальный ключ на основе caller_info
-        radio_key = f"gdrive_gcs_source_radio{caller_info}"
-        data_source = st.radio(
-            "Источник данных",
-            source_options,
-            index=default_index,
-            key=radio_key  # Уникальный ключ
-        )
-        # Сохраняем выбранное значение в session state
-        safe_session_set("gdrive_gcs_source_selected", data_source)
-        
-        st.markdown("---")
-        
-        # Обрабатываем выбор источника
-        if data_source == "Google Drive":
-            if GDRIVE_ENABLED:
-                result = _render_gdrive_load()
-                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-                return result
-            else:
-                st.error("❌ Google Drive недоступен")
-                safe_session_set(render_key, False)
-                return None, {}
-        elif data_source == "Google Cloud Storage (GCS)":
-            if GCS_ENABLED:
-                result = _render_gcs_load()
-                # Сохраняем информацию об источнике
-                if result[0]:
-                    safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
-                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-                return result
-            else:
-                st.error("❌ Google Cloud Storage недоступен")
-                safe_session_set(render_key, False)
-                return None, {}
+            result = _render_gdrive_load()
+            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+            return result
         else:
-            st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
+            st.error("❌ Google Drive недоступен")
             safe_session_set(render_key, False)
             return None, {}
+    elif data_source == "Google Cloud Storage (GCS)":
+        if GCS_ENABLED:
+            result = _render_gcs_load()
+            # Сохраняем информацию об источнике
+            if result[0]:
+                safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
+            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+            return result
+        else:
+            st.error("❌ Google Cloud Storage недоступен")
+            safe_session_set(render_key, False)
+            return None, {}
+    else:
+        st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
+        safe_session_set(render_key, False)
+        return None, {}
     
     # Если дошли сюда, сбрасываем флаг
     safe_session_set(render_key, False)
