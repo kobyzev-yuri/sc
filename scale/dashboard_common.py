@@ -659,12 +659,9 @@ def render_gdrive_load_section() -> tuple:
     # Обрабатываем выбор источника - показываем интерфейс с кнопками загрузки
     if data_source == "Google Drive":
         if GDRIVE_ENABLED:
-            result = _render_gdrive_load()
-            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-            return result
+            return _render_gdrive_load()
         else:
             st.error("❌ Google Drive недоступен")
-            safe_session_set(render_key, False)
             return None, {}
     elif data_source == "Google Cloud Storage (GCS)":
         if GCS_ENABLED:
@@ -672,19 +669,14 @@ def render_gdrive_load_section() -> tuple:
             # Сохраняем информацию об источнике
             if result and result[0]:
                 safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
-            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
             return result
         else:
             st.error("❌ Google Cloud Storage недоступен")
-            safe_session_set(render_key, False)
             return None, {}
     else:
         st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
-        safe_session_set(render_key, False)
         return None, {}
     
-    # Если дошли сюда, сбрасываем флаг
-    safe_session_set(render_key, False)
     return None, {}
 
 
