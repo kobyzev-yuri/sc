@@ -14,3 +14,8 @@ matplotlib>=3.6.0
 # Обработка изображений (базовая)
 Pillow>=9.5.0
 
+# Интеграция с Google Drive (опционально)
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+

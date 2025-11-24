@@ -53,15 +53,11 @@ def _get_gcs_client(log_callback: Optional[callable] = None):
         for path in possible_paths:
             if os.path.exists(path):
                 service_account_path = path
-                if log_callback:
-                    log_callback(f"📁 Найден service account key: {path}")
                 break
     
     # Используем service account key если найден
     if service_account_path and os.path.exists(service_account_path):
         try:
-            if log_callback:
-                log_callback(f"🔑 Использование service account key: {service_account_path}")
             credentials = service_account.Credentials.from_service_account_file(
                 service_account_path,
                 scopes=['https://www.googleapis.com/auth/cloud-platform']

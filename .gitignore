@@ -58,7 +58,16 @@ build/
 # Streamlit
 .streamlit/
 
+# Google OAuth credentials (не должны попадать в git!)
+credentials.json
+.gdrive_token.json
+
 gcp_deployment/
+
+# Архивы деплоймента (не нужны в репозитории)
+*.tar.gz
+deployment_full/
+deployment_package/
 
 # Тесты (архивированы)
 test/

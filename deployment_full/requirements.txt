@@ -63,8 +63,3 @@ shapely>=2.0.0
 # Google Cloud Storage (для загрузки данных из GCS bucket)
 google-cloud-storage>=2.10.0
 
-# Google Drive API (для интеграции с Google Drive)
-google-api-python-client>=2.100.0
-google-auth-httplib2>=0.1.1
-google-auth-oauthlib>=1.1.0
-

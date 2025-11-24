@@ -30,6 +30,9 @@ COPY .streamlit/config.toml .streamlit/config.toml
 # Создаем необходимые директории
 RUN mkdir -p results/predictions data
 
+# Создаем директорию для Google Drive credentials
+RUN mkdir -p /root/.config/gdrive
+
 # Открываем порт для Streamlit
 EXPOSE 8080
 
@@ -40,6 +43,9 @@ ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 ENV STREAMLIT_SERVER_ENABLE_CORS=false
 ENV STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
+
+# Настройка пути к Google Drive credentials по умолчанию
+ENV GOOGLE_DRIVE_CREDENTIALS_PATH=/root/.config/gdrive/credentials.json
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

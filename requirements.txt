@@ -60,3 +60,6 @@ shapely>=2.0.0
 # Для работы с большими изображениями (опционально, если используется cucim)
 # cucim>=23.0.0
 
+# Google Cloud Storage (для загрузки данных из GCS bucket)
+google-cloud-storage>=2.10.0
+
