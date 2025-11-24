@@ -922,11 +922,11 @@ def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
             
             if last_loaded_hash != current_hash:
                 safe_session_set("gcs_last_loaded_hash", current_hash)
-                # КРИТИЧНО: НЕ вызываем rerun здесь - данные уже сохранены в session state
-                # Основной код dashboard сам проверит session state и использует данные
-                st.info("✅ Данные загружены и сохранены. Интерфейс обновится автоматически.")
-                # Используем st.experimental_rerun() только если действительно нужно
-                # Но лучше позволить пользователю самому обновить страницу или использовать данные
+                # КРИТИЧНО: Используем st.experimental_rerun() вместо st.rerun()
+                # Это более мягкий способ обновления, который лучше сохраняет состояние
+                st.success("✅ Данные загружены! Обновляю интерфейс...")
+                # Используем JavaScript для мягкого обновления страницы
+                st.markdown("<script>setTimeout(function(){window.location.reload();}, 500);</script>", unsafe_allow_html=True)
             else:
                 st.info("ℹ️ Данные уже загружены ранее")
                 
