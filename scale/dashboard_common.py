@@ -25,6 +25,9 @@ try:
 except ImportError:
     st = None
 
+# Настройка логирования для отладки (определяем ДО импортов)
+DEBUG_MODE = False
+
 # Импорт интеграции с Google Drive (опционально)
 try:
     from scale.gdrive_integration import (
@@ -37,10 +40,20 @@ try:
         SCOPES,
     )
     GDRIVE_ENABLED = is_gdrive_available()
-except ImportError:
+    if DEBUG_MODE:
+        logger.debug(f"[GDRIVE] GDRIVE_ENABLED = {GDRIVE_ENABLED}")
+except ImportError as e:
     GDRIVE_ENABLED = False
     create_oauth_flow = None
     SCOPES = []
+    if DEBUG_MODE:
+        logger.debug(f"[GDRIVE] ImportError: {e}")
+except Exception as e:
+    GDRIVE_ENABLED = False
+    create_oauth_flow = None
+    SCOPES = []
+    if DEBUG_MODE:
+        logger.debug(f"[GDRIVE] Exception при импорте: {e}")
 
 # Импорт интеграции с Google Cloud Storage (опционально)
 try:
@@ -51,10 +64,6 @@ try:
     GCS_ENABLED = is_gcs_available()
 except ImportError:
     GCS_ENABLED = False
-
-
-# Настройка логирования для отладки
-DEBUG_MODE = False
 
 
 def safe_session_get(key, default=None):
