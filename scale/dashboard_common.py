@@ -600,17 +600,9 @@ def render_gdrive_load_section() -> tuple:
     if frame and frame.f_back:
         caller_info = f"_{frame.f_back.f_lineno}"
     
-    # Проверяем, не рендерится ли уже эта секция
-    render_key = f"gdrive_load_section_rendered{caller_info}"
-    if safe_session_get(render_key, False):
-        # Уже рендерится - возвращаем данные из session state если есть
-        existing_predictions = safe_session_get("predictions_cloud", None)
-        if existing_predictions:
-            return safe_session_get("gdrive_load_source_info", None), existing_predictions
-        return None, {}
-    
-    # Устанавливаем флаг, что секция рендерится
-    safe_session_set(render_key, True)
+    # КРИТИЧНО: НЕ используем флаг для предотвращения рендера - это скрывает кнопки!
+    # Вместо этого используем уникальный ключ для виджета, чтобы избежать конфликтов
+    # Флаг может блокировать показ интерфейса с кнопками
     
     st.info("📌 **Важно:** Файлы в Cloud Run пропадают при перезапуске. Используйте Google Drive или GCS для постоянного хранения.")
     
@@ -623,19 +615,14 @@ def render_gdrive_load_section() -> tuple:
     
     if not source_options:
         st.warning("⚠️ Ни Google Drive, ни GCS не доступны.")
-        safe_session_set(render_key, False)
         return None, {}
     
     # Если доступен только один источник, используем его напрямую
     if len(source_options) == 1:
         if source_options[0] == "Google Drive" and GDRIVE_ENABLED:
-            result = _render_gdrive_load()
-            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-            return result
+            return _render_gdrive_load()
         elif source_options[0] == "Google Cloud Storage (GCS)" and GCS_ENABLED:
-            result = _render_gcs_load()
-            safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
-            return result
+            return _render_gcs_load()
     
     # Если доступны оба источника, показываем выбор
     st.markdown("---")
@@ -669,7 +656,7 @@ def render_gdrive_load_section() -> tuple:
     
     st.markdown("---")
     
-    # Обрабатываем выбор источника
+    # Обрабатываем выбор источника - показываем интерфейс с кнопками загрузки
     if data_source == "Google Drive":
         if GDRIVE_ENABLED:
             result = _render_gdrive_load()
@@ -683,7 +670,7 @@ def render_gdrive_load_section() -> tuple:
         if GCS_ENABLED:
             result = _render_gcs_load()
             # Сохраняем информацию об источнике
-            if result[0]:
+            if result and result[0]:
                 safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
             safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
             return result
