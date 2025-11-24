@@ -625,11 +625,16 @@ def render_gdrive_load_section() -> tuple:
         except ValueError:
             default_index = 0
     
+    # Используем уникальный ключ на основе текущего времени и случайного числа
+    # чтобы избежать конфликтов при множественных вызовах
+    import time
+    import random
+    unique_key = f"gdrive_gcs_source_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     data_source = st.radio(
         "Источник данных",
         source_options,
         index=default_index,
-        key="gdrive_gcs_source"
+        key=unique_key
     )
     
     st.markdown("---")
@@ -826,13 +831,18 @@ def _render_gcs_load() -> tuple:
             После настройки перезапустите dashboard.
             """)
     
+    # Используем фиксированный ключ для bucket_name, но проверяем session state
+    bucket_name_default = safe_session_get("gcs_bucket_name", "scalebucket")
     bucket_name = st.text_input(
         "Имя GCS bucket",
-        value="scalebucket",  # Значение по умолчанию
+        value=bucket_name_default,
         placeholder="scalebucket",
         help="Имя вашего Google Cloud Storage bucket",
-        key="gcs_bucket_name"
+        key="gcs_bucket_name_input"
     )
+    # Сохраняем значение в session state
+    if bucket_name:
+        safe_session_set("gcs_bucket_name", bucket_name)
     
     prefix = st.text_input(
         "Префикс пути (опционально)",
