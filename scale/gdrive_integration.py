@@ -10,8 +10,11 @@
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 import io
+
+if TYPE_CHECKING:
+    from google_auth_oauthlib.flow import Flow
 
 try:
     from google.oauth2.credentials import Credentials
@@ -23,6 +26,7 @@ try:
     GDRIVE_AVAILABLE = True
 except ImportError:
     GDRIVE_AVAILABLE = False
+    # Flow будет None если импорт не удался, но аннотация типа использует строку "Flow"
 
 
 # OAuth 2.0 Scopes для Google Drive
@@ -119,7 +123,7 @@ def get_credentials(credentials_path: Optional[str] = None, token_path: Optional
     return creds
 
 
-def create_oauth_flow(credentials_path: str, redirect_uri: str = None) -> Optional[Flow]:
+def create_oauth_flow(credentials_path: str, redirect_uri: str = None) -> Optional["Flow"]:
     """
     Создает OAuth flow для авторизации.
     
