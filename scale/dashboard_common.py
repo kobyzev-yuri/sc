@@ -908,10 +908,18 @@ def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
             # Принудительно устанавливаем флаги для использования данных
             safe_session_set("use_cloud_storage", True)
             
-            st.write("🔍 [DEBUG GCS] Вызываю st.rerun()...")
-            # Вызываем rerun ОДИН раз для обновления интерфейса с загруженными данными
-            # Это необходимо, так как данные загружаются в sidebar, а основной код выполняется после
-            st.rerun()
+            # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
+            # Это предотвращает бесконечный цикл rerun
+            last_loaded_hash = safe_session_get("gcs_last_loaded_hash", None)
+            current_hash = hash(str(sorted(predictions_converted.keys())))
+            
+            if last_loaded_hash != current_hash:
+                # Это новые данные - вызываем rerun
+                safe_session_set("gcs_last_loaded_hash", current_hash)
+                st.write("🔍 [DEBUG GCS] Вызываю st.rerun() для новых данных...")
+                st.rerun()
+            else:
+                st.write("🔍 [DEBUG GCS] Данные уже загружены, пропускаю rerun")
         except Exception as e:
             st.error(f"Ошибка при обработке данных из GCS: {e}")
         return f"gcs://{bucket_name}/{prefix}", predictions
