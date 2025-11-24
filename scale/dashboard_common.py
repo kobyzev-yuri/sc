@@ -604,8 +604,6 @@ def render_gdrive_load_section() -> tuple:
     
     # Устанавливаем флаг, что секция рендерится
     safe_session_set(render_key, True)
-    
-    try:
         st.info("📌 **Важно:** Файлы в Cloud Run пропадают при перезапуске. Используйте Google Drive или GCS для постоянного хранения.")
         
         # Выбор источника данных
@@ -657,25 +655,39 @@ def render_gdrive_load_section() -> tuple:
         )
         # Сохраняем выбранное значение в session state
         safe_session_set("gdrive_gcs_source_selected", data_source)
-    
-    st.markdown("---")
-    
-    # Обрабатываем выбор источника
-    if data_source == "Google Drive":
-        if GDRIVE_ENABLED:
-            return _render_gdrive_load()
+        
+        st.markdown("---")
+        
+        # Обрабатываем выбор источника
+        if data_source == "Google Drive":
+            if GDRIVE_ENABLED:
+                result = _render_gdrive_load()
+                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+                return result
+            else:
+                st.error("❌ Google Drive недоступен")
+                safe_session_set(render_key, False)
+                return None, {}
+        elif data_source == "Google Cloud Storage (GCS)":
+            if GCS_ENABLED:
+                result = _render_gcs_load()
+                # Сохраняем информацию об источнике
+                if result[0]:
+                    safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
+                safe_session_set(render_key, False)  # Сбрасываем флаг после завершения
+                return result
+            else:
+                st.error("❌ Google Cloud Storage недоступен")
+                safe_session_set(render_key, False)
+                return None, {}
         else:
-            st.error("❌ Google Drive недоступен")
+            st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
+            safe_session_set(render_key, False)
             return None, {}
-    elif data_source == "Google Cloud Storage (GCS)":
-        if GCS_ENABLED:
-            return _render_gcs_load()
-        else:
-            st.error("❌ Google Cloud Storage недоступен")
-            return None, {}
-    else:
-        st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
-        return None, {}
+    
+    # Если дошли сюда, сбрасываем флаг
+    safe_session_set(render_key, False)
+    return None, {}
 
 
 def _render_gdrive_load() -> tuple:
