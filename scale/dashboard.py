@@ -15,6 +15,9 @@ import json
 from datetime import datetime
 import logging
 
+# Настройка логирования
+logger = logging.getLogger(__name__)
+
 # Добавляем путь к проекту для импортов
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
@@ -44,7 +47,6 @@ from scale.dashboard_common import (
     safe_session_set,
     safe_session_del,
     safe_session_has,
-    load_predictions_from_upload,
     load_predictions_from_files,
     load_predictions_from_gdrive,
     render_gdrive_upload_section,
@@ -54,7 +56,7 @@ from scale.dashboard_common import (
 )
 
 # Настройка логирования для отладки
-DEBUG_MODE = True  # Включено для отладки GCS/GDrive загрузки
+DEBUG_MODE = False  # Отладочные сообщения выводятся в логи Streamlit
 
 
 def create_experiment_dir(base_dir: Path = Path("experiments")) -> Path:
@@ -204,52 +206,57 @@ def render_dashboard():
         use_gdrive = safe_session_get("use_gdrive", False)
         
         # Формируем список опций
-        data_source_options = ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"]
-        if GDRIVE_ENABLED or GCS_ENABLED:
-            # Если доступен хотя бы один из источников, добавляем опцию
-            if GDRIVE_ENABLED and GCS_ENABLED:
-                data_source_options.append("Google Drive / GCS")
-            elif GDRIVE_ENABLED:
-                data_source_options.append("Google Drive")
-            elif GCS_ENABLED:
-                data_source_options.append("Google Cloud Storage (GCS)")
+        data_source_options = ["Использовать директорию", "Использовать данные из эксперимента"]
+        # Добавляем отдельные опции для каждого доступного источника
+        if GDRIVE_ENABLED:
+            data_source_options.append("Google Drive")
+        if GCS_ENABLED:
+            data_source_options.append("Google Cloud Storage (GCS)")
         
         # Определяем индекс по умолчанию
         use_cloud_storage = safe_session_get("use_cloud_storage", False)
         # Проверяем, установлен ли data_source из session state (после загрузки из GCS/GDrive)
         saved_data_source = safe_session_get("data_source", None)
-        # Если есть загруженные данные из cloud storage, приоритетно используем их
-        if use_cloud_storage and safe_session_get("predictions_cloud", None):
+        
+        # КРИТИЧНО: Если есть загруженные данные из cloud storage, приоритетно устанавливаем правильный data_source
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions and len(cloud_predictions) > 0:
+            # Есть загруженные данные из cloud storage - устанавливаем правильный data_source
+            if GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
+                saved_data_source = "Google Cloud Storage (GCS)"
+                safe_session_set("data_source", saved_data_source)
+                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (есть данные из GCS)")
+            elif GDRIVE_ENABLED and "Google Drive" in data_source_options:
+                saved_data_source = "Google Drive"
+                safe_session_set("data_source", saved_data_source)
+                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (есть данные из GDrive)")
+        elif use_cloud_storage:
+            # Флаг установлен, но данных может не быть - все равно устанавливаем правильный data_source
             if saved_data_source and saved_data_source in data_source_options:
                 # Используем сохраненный data_source
                 pass  # уже установлен
             elif GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
                 saved_data_source = "Google Cloud Storage (GCS)"
                 safe_session_set("data_source", saved_data_source)
+                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (use_cloud_storage=True)")
             elif GDRIVE_ENABLED and "Google Drive" in data_source_options:
                 saved_data_source = "Google Drive"
                 safe_session_set("data_source", saved_data_source)
-            elif GDRIVE_ENABLED and "Google Drive / GCS" in data_source_options:
-                saved_data_source = "Google Drive / GCS"
-                safe_session_set("data_source", saved_data_source)
+                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (use_cloud_storage=True)")
         
         if saved_data_source and saved_data_source in data_source_options:
             # Используем сохраненный data_source
             default_index = data_source_options.index(saved_data_source)
-        elif (use_gdrive or use_cloud_storage) and (GDRIVE_ENABLED or GCS_ENABLED):
-            # Находим индекс для cloud storage опции
-            if "Google Cloud Storage (GCS)" in data_source_options:
-                default_index = data_source_options.index("Google Cloud Storage (GCS)")
-            elif "Google Drive / GCS" in data_source_options:
-                default_index = data_source_options.index("Google Drive / GCS")
-            elif "Google Drive" in data_source_options:
-                default_index = data_source_options.index("Google Drive")
-            else:
-                default_index = len(data_source_options) - 1
+        elif use_cloud_storage and GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
+            # Находим индекс для GCS опции
+            default_index = data_source_options.index("Google Cloud Storage (GCS)")
+        elif use_gdrive and GDRIVE_ENABLED and "Google Drive" in data_source_options:
+            # Находим индекс для Google Drive опции
+            default_index = data_source_options.index("Google Drive")
         elif use_exp:
-            default_index = 2
-        elif use_dir:
             default_index = 1
+        elif use_dir:
+            default_index = 0
         else:
             default_index = 0
         
@@ -260,13 +267,110 @@ def render_dashboard():
             key="data_source_selector"  # Добавляем key для стабильности
         )
         
-        # Сохраняем выбранный data_source в session state
-        safe_session_set("data_source", data_source)
+        # КРИТИЧНО: Сохраняем выбранный data_source в session state ТОЛЬКО если он из правильного списка
+        if data_source in data_source_options:
+            safe_session_set("data_source", data_source)
+            logger.debug(f"[DATA_SOURCE] Сохранен data_source из radio: {data_source}")
+        else:
+            logger.warning(f"[DATA_SOURCE] Попытка сохранить неправильный data_source: {data_source}, опции: {data_source_options}")
+            # Если data_source неправильный, но есть данные из cloud, устанавливаем правильный
+            if cloud_predictions and len(cloud_predictions) > 0:
+                if GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
+                    safe_session_set("data_source", "Google Cloud Storage (GCS)")
+                    logger.debug(f"[DATA_SOURCE] Исправлен data_source на: Google Cloud Storage (GCS)")
+                elif GDRIVE_ENABLED and "Google Drive" in data_source_options:
+                    safe_session_set("data_source", "Google Drive")
+                    logger.debug(f"[DATA_SOURCE] Исправлен data_source на: Google Drive")
         
         use_default_data = (data_source == "Использовать директорию")
         use_experiment_data = (data_source == "Использовать данные из эксперимента")
         use_gdrive_data = (data_source == "Google Drive") and GDRIVE_ENABLED
-        use_cloud_storage_data = (data_source == "Google Drive / GCS" or data_source == "Google Cloud Storage (GCS)") and (GDRIVE_ENABLED or GCS_ENABLED)
+        use_cloud_storage_data = (data_source == "Google Cloud Storage (GCS)") and GCS_ENABLED
+        
+        # Поля ввода для Google Drive и GCS в sidebar (левая панель)
+        if use_gdrive_data:
+            st.markdown("---")
+            st.subheader("📥 Google Drive")
+            saved_url = safe_session_get("gdrive_load_url", "")
+            drive_folder_url = st.text_input(
+                "Ссылка на папку Google Drive",
+                value=saved_url if saved_url else "",
+                placeholder="https://drive.google.com/drive/folders/1ABC123xyz...",
+                help="Вставьте ссылку на расшаренную папку с JSON файлами",
+                key="gdrive_load_folder_url_sidebar"
+            )
+            # Сохраняем URL в session state
+            if drive_folder_url:
+                safe_session_set("gdrive_load_url", drive_folder_url)
+            
+            # Проверка авторизации Google Drive
+            import os
+            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+            creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+            from scale.dashboard_common import get_credentials
+            credentials = get_credentials(credentials_path=creds_path)
+            
+            # Показываем кнопку авторизации, если нужно
+            if not credentials:
+                st.warning("⚠️ Требуется авторизация Google Drive")
+                if st.button("🔐 Авторизоваться в Google Drive", key="gdrive_authorize_button_sidebar"):
+                    from scale.dashboard_common import authorize_gdrive
+                    if authorize_gdrive(creds_path):
+                        st.success("✅ Авторизация успешна!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Ошибка авторизации")
+        
+        if use_cloud_storage_data:
+            st.markdown("---")
+            st.subheader("📥 Google Cloud Storage")
+            bucket_name_default = safe_session_get("gcs_bucket_name", "scalebucket")
+            bucket_name = st.text_input(
+                "Имя GCS bucket",
+                value=bucket_name_default,
+                placeholder="scalebucket",
+                help="Имя вашего Google Cloud Storage bucket",
+                key="gcs_bucket_name_input_sidebar"
+            )
+            # Сохраняем значение в session state
+            if bucket_name:
+                safe_session_set("gcs_bucket_name", bucket_name)
+            
+            # Проверка авторизации GCS
+            auth_ok = False
+            try:
+                from google.cloud import storage
+                client = storage.Client()
+                try:
+                    _ = list(client.list_buckets(max_results=1))
+                    auth_ok = True
+                except Exception:
+                    auth_ok = False
+            except Exception:
+                auth_ok = False
+            
+            if not auth_ok:
+                st.warning("⚠️ **Требуется авторизация GCS**")
+                with st.expander("🔧 Как настроить авторизацию"):
+                    st.markdown("""
+                    **Вариант 1 (для локальной разработки):**
+                    ```bash
+                    gcloud auth application-default login
+                    ```
+                    
+                    **Вариант 2 (для Cloud Run / Service Account):**
+                    ```bash
+                    export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+                    ```
+                    
+                    **Вариант 3 (если используете gcloud):**
+                    ```bash
+                    gcloud auth login
+                    gcloud config set project YOUR_PROJECT_ID
+                    ```
+                    
+                    После настройки перезапустите dashboard.
+                    """)
         
         # КРИТИЧНО: Если в session state установлен флаг use_cloud_storage и есть данные,
         # принудительно используем cloud storage независимо от выбора в селекторе
@@ -512,74 +616,6 @@ def render_dashboard():
                 st.warning("⚠️ Не найдено экспериментов с сохраненными данными")
                 st.info("💡 Сначала запустите подбор признаков для создания эксперимента")
                 use_experiment_data = False
-
-        uploaded_files = None
-        if not use_default_data and not use_experiment_data and not use_gdrive_data and not use_cloud_storage_data:
-            # Выбор директории для загрузки файлов
-            st.subheader("📁 Выбор директории для загрузки")
-            
-            # Предустановленные директории
-            default_upload_dirs = [
-                "results/predictions",
-                "test/predictions",
-                "scale_results/predictions",
-            ]
-            
-            # Выбор из предустановленных или ввод своего пути
-            upload_dir_option = st.radio(
-                "Выберите директорию для загрузки:",
-                ["Предустановленная", "Своя директория"],
-                index=0,
-                key="upload_dir_option"
-            )
-            
-            if upload_dir_option == "Предустановленная":
-                selected_upload_dir = st.selectbox(
-                    "Выберите директорию:",
-                    default_upload_dirs,
-                    index=0,
-                    key="selected_upload_dir"
-                )
-                upload_dir = Path(selected_upload_dir)
-            else:
-                custom_upload_dir = st.text_input(
-                    "Введите путь к директории:",
-                    value="results/predictions",
-                    placeholder="например: test/predictions",
-                    key="custom_upload_dir"
-                )
-                upload_dir = Path(custom_upload_dir)
-            
-            # Создаем директорию, если её нет
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            
-            st.info(f"📁 **Директория для загрузки:** `{upload_dir}`")
-            st.caption("Загруженные файлы будут сохранены в эту директорию")
-            
-            uploaded_files = st.file_uploader(
-                f"Загрузите JSON файлы с предсказаниями (будут сохранены в {upload_dir})",
-                type=["json"],
-                accept_multiple_files=True,
-            )
-            
-            # Сохраняем загруженные файлы в директорию
-            if uploaded_files:
-                saved_count = 0
-                for uploaded_file in uploaded_files:
-                    try:
-                        file_path = upload_dir / uploaded_file.name
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        saved_count += 1
-                    except Exception as e:
-                        st.error(f"Ошибка при сохранении {uploaded_file.name}: {e}")
-                
-                if saved_count > 0:
-                    st.success(f"✅ Сохранено {saved_count} файлов в {upload_dir}")
-                    # Обновляем выбранную директорию на директорию загрузки
-                    safe_session_set("predictions_dir", str(upload_dir))
-                    safe_session_set("use_directory", True)
-                    st.rerun()
         
         elif use_gdrive_data or use_cloud_storage_data:
             # КРИТИЧНО: Проверяем session state ПЕРВЫМ делом
@@ -819,13 +855,12 @@ def render_dashboard():
     
     # ОТЛАДКА: Логируем состояние session state в начале рендера
     if DEBUG_MODE or safe_session_get("debug_mode", False):
-        st.sidebar.write("---")
-        st.sidebar.write("🔍 [DEBUG] Состояние session state:")
-        st.sidebar.write(f"  - predictions_cloud: {safe_session_get('predictions_cloud', 'НЕТ')}")
-        st.sidebar.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
-        st.sidebar.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
+        logger.debug("Состояние session state:")
+        logger.debug(f"  - predictions_cloud: {safe_session_get('predictions_cloud', 'НЕТ')}")
+        logger.debug(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
+        logger.debug(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
         if safe_session_get('predictions_cloud', None):
-            st.sidebar.write(f"  - Ключи predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:3]}")
+            logger.debug(f"  - Ключи predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:3]}")
 
     # Загрузка данных с кэшированием
     if use_default_data:
@@ -871,80 +906,88 @@ def render_dashboard():
                     safe_session_set("predictions_dir_cache", str(predictions_dir))
     
     elif use_gdrive_data:
-        # Загрузка из Google Drive
-        gdrive_predictions = safe_session_get("predictions_gdrive", None)
-        if gdrive_predictions:
-            predictions = gdrive_predictions
-            # Сохраняем в кэш
-            safe_session_set("predictions_gdrive_cache", predictions)
+        # Загрузка из Google Drive (через render_gdrive_load_section)
+        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
+        # Сначала проверяем session state для использования уже загруженных данных
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions and len(cloud_predictions) > 0:
+            predictions = cloud_predictions
+            # Сохраняем в кэш для использования ниже
+            safe_session_set("predictions_cloud_cache", predictions)
+            st.info(f"✅ Используются данные из Google Drive: {len(predictions)} файлов")
+        
+        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
+        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected="Google Drive")
+        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        if cloud_predictions_new and len(cloud_predictions_new) > 0:
+            predictions = cloud_predictions_new
+            safe_session_set("predictions_cloud_cache", predictions)
+            # Обновляем cloud_predictions для использования ниже
+            cloud_predictions = cloud_predictions_new
     
     elif use_cloud_storage_data:
         # Загрузка из Google Drive или GCS (через render_gdrive_load_section)
-        # КРИТИЧНО: Проверяем session state ПЕРВЫМ делом
+        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
+        # Сначала проверяем session state для использования уже загруженных данных
         cloud_predictions = safe_session_get("predictions_cloud", None)
         if cloud_predictions and len(cloud_predictions) > 0:
             predictions = cloud_predictions
             # Сохраняем в кэш для использования ниже
             safe_session_set("predictions_cloud_cache", predictions)
             st.info(f"✅ Используются данные из облачного хранилища: {len(predictions)} файлов")
-        else:
-            # Если данных нет в session state, вызываем функцию загрузки ОДИН РАЗ
-            # Проверяем, не вызывалась ли уже функция в этом рендере
-            if not safe_session_get("gdrive_load_called_this_render", False):
-                safe_session_set("gdrive_load_called_this_render", True)
-                source_info, cloud_predictions = render_gdrive_load_section()
-                # Сбрасываем флаг после завершения рендера (будет сброшен при следующем rerun)
-            else:
-                # Уже вызывалась - просто ждем данных
-                pass
+        
+        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
+        source_info, cloud_predictions_new = render_gdrive_load_section()
+        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        if cloud_predictions_new and len(cloud_predictions_new) > 0:
+            predictions = cloud_predictions_new
+            safe_session_set("predictions_cloud_cache", predictions)
+            # Обновляем cloud_predictions для использования ниже
+            cloud_predictions = cloud_predictions_new
     
     # ВАЖНО: Проверяем, есть ли загруженные данные из GCS/GDrive ПЕРЕД проверкой других источников
     # Это нужно для случая, когда данные загружены, но источник не выбран в селекторе
     # Приоритет: если данные загружены из cloud storage, используем их в первую очередь
-    st.write("🔍 [DEBUG] Проверка predictions перед cloud fallback:")
-    st.write(f"  - predictions: {predictions is not None}, len: {len(predictions) if predictions else 0}")
-    st.write(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
-    st.write(f"  - use_gdrive_data: {use_gdrive_data}")
+    logger.debug(f"Проверка predictions перед cloud fallback:")
+    logger.debug(f"  - predictions: {predictions is not None}, len: {len(predictions) if predictions else 0}")
+    logger.debug(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
+    logger.debug(f"  - use_gdrive_data: {use_gdrive_data}")
     
     if not predictions or len(predictions) == 0:
         cloud_predictions = safe_session_get("predictions_cloud", None)
         
-        st.write("🔍 [DEBUG] Проверка cloud_predictions:")
-        st.write(f"  - cloud_predictions is not None: {cloud_predictions is not None}")
+        logger.debug(f"Проверка cloud_predictions:")
+        logger.debug(f"  - cloud_predictions is not None: {cloud_predictions is not None}")
         if cloud_predictions:
-            st.write(f"  - Тип cloud_predictions: {type(cloud_predictions)}")
-            st.write(f"  - Длина cloud_predictions: {len(cloud_predictions) if hasattr(cloud_predictions, '__len__') else 'N/A'}")
+            logger.debug(f"  - Тип cloud_predictions: {type(cloud_predictions)}")
+            logger.debug(f"  - Длина cloud_predictions: {len(cloud_predictions) if hasattr(cloud_predictions, '__len__') else 'N/A'}")
             if isinstance(cloud_predictions, dict):
-                st.write(f"  - Ключи cloud_predictions: {list(cloud_predictions.keys())[:3]}")
+                logger.debug(f"  - Ключи cloud_predictions: {list(cloud_predictions.keys())[:3]}")
         
         if cloud_predictions and len(cloud_predictions) > 0:
-            st.write("🔍 [DEBUG] ✅ Использую cloud_predictions!")
+            logger.debug("✅ Использую cloud_predictions!")
             predictions = cloud_predictions
             # Убеждаемся, что флаги установлены правильно
             safe_session_set("use_cloud_storage", True)
-            # Устанавливаем data_source, если он еще не установлен
+            # КРИТИЧНО: Устанавливаем правильный data_source в зависимости от доступных опций
             current_data_source = safe_session_get("data_source", None)
-            if current_data_source not in ["Google Drive", "Google Drive / GCS", "Google Cloud Storage (GCS)"]:
+            # Проверяем, что data_source правильный, и если нет - устанавливаем правильный
+            valid_cloud_sources = []
+            if GCS_ENABLED:
+                valid_cloud_sources.append("Google Cloud Storage (GCS)")
+            if GDRIVE_ENABLED:
+                valid_cloud_sources.append("Google Drive")
+            
+            if current_data_source not in valid_cloud_sources:
+                # Устанавливаем правильный data_source
                 if GCS_ENABLED:
                     safe_session_set("data_source", "Google Cloud Storage (GCS)")
+                    logger.debug(f"[FALLBACK] Установлен data_source: Google Cloud Storage (GCS)")
                 elif GDRIVE_ENABLED:
                     safe_session_set("data_source", "Google Drive")
+                    logger.debug(f"[FALLBACK] Установлен data_source: Google Drive")
         else:
-            st.write("🔍 [DEBUG] ❌ cloud_predictions пусто или None")
-
-    elif uploaded_files:
-        # Для загруженных файлов используем хэш имен файлов как ключ кэша
-        files_hash = hash(tuple(sorted([f.name for f in uploaded_files])))
-        predictions_cache_key = f"predictions_uploaded_{files_hash}"
-        
-        if safe_session_has(predictions_cache_key):
-            predictions = safe_session_get(predictions_cache_key)
-        else:
-            # Загрузка предсказаний из загруженных файлов
-            with st.spinner("Загрузка предсказаний..."):
-                predictions = load_predictions_from_upload(uploaded_files)
-                # Сохраняем в кэш
-                safe_session_set(predictions_cache_key, predictions)
+            logger.debug("❌ cloud_predictions пусто или None")
 
     # Загрузка данных из эксперимента (если выбран этот источник)
     if use_experiment_data and safe_session_has("experiment_dir"):
@@ -1328,18 +1371,22 @@ def render_dashboard():
                    (safe_session_has("df_features") and safe_session_get("df_features") is not None)
     else:
         # Для обычной загрузки проверяем predictions или session_state
+        # КРИТИЧНО: Также проверяем cloud_predictions, если они есть в session state
+        cloud_predictions_check = safe_session_get("predictions_cloud", None)
         has_data = (predictions is not None and len(predictions) > 0) or \
+                   (cloud_predictions_check is not None and len(cloud_predictions_check) > 0) or \
                    (safe_session_has("df") and safe_session_get("df") is not None)
         
         # ОТЛАДКА: Логируем проверку has_data
-        st.write("🔍 [DEBUG] Проверка has_data:")
-        st.write(f"  - predictions is not None: {predictions is not None}")
-        st.write(f"  - len(predictions): {len(predictions) if predictions else 0}")
-        st.write(f"  - safe_session_has('df'): {safe_session_has('df')}")
-        st.write(f"  - has_data: {has_data}")
-        st.write(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
-        st.write(f"  - use_gdrive_data: {use_gdrive_data}")
-        st.write(f"  - data_source: {data_source}")
+        logger.debug(f"Проверка has_data:")
+        logger.debug(f"  - predictions is not None: {predictions is not None}")
+        logger.debug(f"  - len(predictions): {len(predictions) if predictions else 0}")
+        logger.debug(f"  - cloud_predictions_check: {cloud_predictions_check is not None}, len: {len(cloud_predictions_check) if cloud_predictions_check else 0}")
+        logger.debug(f"  - safe_session_has('df'): {safe_session_has('df')}")
+        logger.debug(f"  - has_data: {has_data}")
+        logger.debug(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
+        logger.debug(f"  - use_gdrive_data: {use_gdrive_data}")
+        logger.debug(f"  - data_source: {data_source}")
     
     # Создаем вкладки только если есть данные
     if has_data:
@@ -3339,9 +3386,9 @@ def render_dashboard():
                     
                 if DEBUG_MODE:
                     if need_retrain:
-                        st.error(f"🔍 DEBUG: ⚠️ ПЕРЕОБУЧЕНИЕ НЕОБХОДИМО: {', '.join(debug_info) if debug_info else 'неизвестная причина'}")
+                        logger.debug(f"⚠️ ПЕРЕОБУЧЕНИЕ НЕОБХОДИМО: {', '.join(debug_info) if debug_info else 'неизвестная причина'}")
                     else:
-                        st.success(f"🔍 DEBUG: ✅ Переобучение НЕ необходимо. Ключ совпадает: {spectral_settings_key}")
+                        logger.debug(f"✅ Переобучение НЕ необходимо. Ключ совпадает: {spectral_settings_key}")
                 
                 # Если загружаем данные из эксперимента, пытаемся загрузить сохраненную модель
                 analyzer_loaded_from_experiment = False

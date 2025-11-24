@@ -3,13 +3,16 @@
 
 Упрощенная версия дашборда с базовым функционалом:
 - Загрузка JSON файлов с предсказаниями
+- Загрузка из Google Drive (расшаренные папки)
+- Сохранение в Google Drive
 - Визуализация данных
 - Базовый анализ
+
+Использует общие функции из scale.dashboard_common для синхронизации с dashboard.py
 """
 
 import sys
 from pathlib import Path
-import json
 from typing import Dict, List, Optional
 
 # Добавляем путь к проекту для импортов
@@ -30,30 +33,16 @@ except ImportError as e:
         "Требуются зависимости для дашборда. Установите: pip install streamlit matplotlib pandas numpy"
     ) from e
 
-
-def load_predictions_from_files(json_files: List[Path]) -> Dict[str, dict]:
-    """Загружает предсказания из JSON файлов."""
-    predictions = {}
-    for json_file in json_files:
-        try:
-            with open(json_file, 'r') as f:
-                data = json.load(f)
-            predictions[json_file.stem] = data
-        except Exception as e:
-            st.error(f"Ошибка при загрузке {json_file.name}: {e}")
-    return predictions
-
-
-def load_predictions_from_upload(uploaded_files) -> Dict[str, dict]:
-    """Загружает предсказания из загруженных файлов."""
-    predictions = {}
-    for uploaded_file in uploaded_files:
-        try:
-            data = json.load(uploaded_file)
-            predictions[Path(uploaded_file.name).stem] = data
-        except Exception as e:
-            st.error(f"Ошибка при загрузке {uploaded_file.name}: {e}")
-    return predictions
+# Импорт общих функций из dashboard_common
+from scale.dashboard_common import (
+    safe_session_get,
+    safe_session_set,
+    load_predictions_from_files,
+    load_predictions_from_gdrive,
+    render_gdrive_upload_section,
+    render_gdrive_load_section,
+    GDRIVE_ENABLED,
+)
 
 
 def aggregate_predictions(predictions: Dict[str, dict]) -> pd.DataFrame:
@@ -85,31 +74,47 @@ def main():
     )
 
     st.title("📊 Dashboard - Анализ данных")
+    
+    # Информация о вариантах хранения
+    with st.expander("ℹ️ О вариантах хранения данных", expanded=False):
+        st.info("""
+        **Два варианта работы с данными:**
+        
+        1. **Локальные директории** (ephemeral storage)
+           - Файлы загружаются внутрь контейнера
+           - Пропадают при перезапуске (это нормально!)
+           - ✅ Идеально для быстрого тестирования и временной работы
+        
+        2. **Google Drive** (постоянное хранилище)
+           - Файлы хранятся в Google Drive
+           - Доступны после перезапуска
+           - ✅ Идеально для постоянного хранения и совместной работы
+        
+        Оба варианта доступны в боковой панели. Выберите нужный в зависимости от задачи!
+        
+        Подробнее: см. `docs/STORAGE_OPTIONS.md`
+        """)
+    
     st.markdown("---")
 
     # Боковая панель для загрузки данных
     with st.sidebar:
         st.header("📁 Загрузка данных")
         
+        # Опции источника данных
+        data_source_options = ["Использовать директорию"]
+        if GDRIVE_ENABLED:
+            data_source_options.append("Google Drive")
+        
         data_source = st.radio(
             "Источник данных",
-            ["Загрузить файлы", "Использовать директорию"],
+            data_source_options,
             index=0
         )
 
         predictions = {}
         
-        if data_source == "Загрузить файлы":
-            uploaded_files = st.file_uploader(
-                "Загрузите JSON файлы",
-                type=["json"],
-                accept_multiple_files=True,
-            )
-            if uploaded_files:
-                predictions = load_predictions_from_upload(uploaded_files)
-                st.success(f"✓ Загружено {len(predictions)} файлов")
-        
-        else:  # Использовать директорию
+        if data_source == "Использовать директорию":
             data_dir = st.text_input(
                 "Путь к директории с JSON файлами",
                 value="results/predictions",
@@ -127,6 +132,16 @@ def main():
                         st.warning(f"⚠ В директории {data_dir} нет JSON файлов")
                 else:
                     st.error(f"❌ Директория {data_dir} не найдена")
+        
+        elif data_source == "Google Drive" and GDRIVE_ENABLED:
+            # Используем общую функцию для загрузки из Google Drive
+            drive_folder_url, gdrive_predictions = render_gdrive_load_section()
+            if gdrive_predictions:
+                predictions = gdrive_predictions
+        
+        elif data_source == "Google Drive" and not GDRIVE_ENABLED:
+            st.error("❌ Интеграция с Google Drive недоступна")
+            st.caption("Установите зависимости: `pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib`")
 
     # Основная область
     if not predictions:

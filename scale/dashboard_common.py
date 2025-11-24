@@ -9,6 +9,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
+import logging
+import re
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 # Добавляем путь к проекту для импортов
 project_root = Path(__file__).parent.parent
@@ -582,9 +587,12 @@ def authorize_gdrive(creds_path: str) -> bool:
             return False
 
 
-def render_gdrive_load_section() -> tuple:
+def render_gdrive_load_section(data_source_selected: str = None) -> tuple:
     """
     Рендерит секцию загрузки из Google Drive или GCS для боковой панели.
+    
+    Args:
+        data_source_selected: Выбранный источник данных из основного меню ("Google Drive" или "Google Cloud Storage (GCS)")
     
     Returns:
         Tuple (source_info, predictions_dict)
@@ -592,290 +600,247 @@ def render_gdrive_load_section() -> tuple:
     if not st:
         return None, {}
     
-    # КРИТИЧНО: Используем уникальный ключ для виджета на основе call stack
-    # Это предотвращает конфликты при множественных вызовах
-    import inspect
-    frame = inspect.currentframe()
-    caller_info = ""
-    if frame and frame.f_back:
-        caller_info = f"_{frame.f_back.f_lineno}"
-    
-    # КРИТИЧНО: НЕ используем флаг для предотвращения рендера - это скрывает кнопки!
-    # Вместо этого используем уникальный ключ для виджета, чтобы избежать конфликтов
-    # Флаг может блокировать показ интерфейса с кнопками
-    
-    st.info("📌 **Важно:** Файлы в Cloud Run пропадают при перезапуске. Используйте Google Drive или GCS для постоянного хранения.")
-    
-    # Выбор источника данных
-    source_options = []
-    if GDRIVE_ENABLED:
-        source_options.append("Google Drive")
-    if GCS_ENABLED:
-        source_options.append("Google Cloud Storage (GCS)")
-    
-    if not source_options:
-        st.warning("⚠️ Ни Google Drive, ни GCS не доступны.")
-        return None, {}
-    
-    # Если доступен только один источник, используем его напрямую
-    if len(source_options) == 1:
-        if source_options[0] == "Google Drive" and GDRIVE_ENABLED:
-            return _render_gdrive_load()
-        elif source_options[0] == "Google Cloud Storage (GCS)" and GCS_ENABLED:
-            return _render_gcs_load()
-    
-    # Если доступны оба источника, показываем выбор
-    st.markdown("---")
-    st.subheader("🌐 Выберите источник данных")
-    
-    # Определяем индекс по умолчанию (предпочитаем GCS если доступен)
-    default_index = 0
-    if GCS_ENABLED and len(source_options) > 1:
-        # Если GCS доступен и есть выбор, выбираем GCS по умолчанию
-        try:
-            default_index = source_options.index("Google Cloud Storage (GCS)")
-        except ValueError:
-            default_index = 0
-    
-    # Используем фиксированный ключ, но проверяем session state
-    # Если значение уже есть в session state, используем его
-    saved_source = safe_session_get("gdrive_gcs_source_selected", None)
-    if saved_source and saved_source in source_options:
-        default_index = source_options.index(saved_source)
-    
-    # Используем уникальный ключ на основе caller_info
-    radio_key = f"gdrive_gcs_source_radio{caller_info}"
-    data_source = st.radio(
-        "Источник данных",
-        source_options,
-        index=default_index,
-        key=radio_key  # Уникальный ключ
-    )
-    # Сохраняем выбранное значение в session state
-    safe_session_set("gdrive_gcs_source_selected", data_source)
-    
-    st.markdown("---")
-    
-    # Обрабатываем выбор источника - показываем интерфейс с кнопками загрузки
-    if data_source == "Google Drive":
-        if GDRIVE_ENABLED:
-            return _render_gdrive_load()
-        else:
-            st.error("❌ Google Drive недоступен")
-            return None, {}
-    elif data_source == "Google Cloud Storage (GCS)":
-        if GCS_ENABLED:
-            result = _render_gcs_load()
-            # Сохраняем информацию об источнике
-            if result and result[0]:
-                safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
-            return result
-        else:
-            st.error("❌ Google Cloud Storage недоступен")
-            return None, {}
+    # Определяем, какой источник использовать на основе переданного параметра или session state
+    if data_source_selected:
+        source = data_source_selected
     else:
-        st.warning(f"⚠️ Неизвестный источник: '{data_source}'")
-        return None, {}
+        # Fallback: используем session state
+        source = safe_session_get("data_source", None)
     
-    return None, {}
+    # КРИТИЧНО: Если источник не определен, пытаемся определить его из session state или доступных опций
+    if not source:
+        # Проверяем, есть ли загруженные данные из cloud storage
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions and len(cloud_predictions) > 0:
+            # Есть данные - определяем источник по data_source или по доступным опциям
+            saved_source = safe_session_get("data_source", None)
+            if saved_source in ["Google Drive", "Google Cloud Storage (GCS)"]:
+                source = saved_source
+            elif GCS_ENABLED:
+                source = "Google Cloud Storage (GCS)"
+            elif GDRIVE_ENABLED:
+                source = "Google Drive"
+        else:
+            # Нет данных - используем первый доступный источник
+            if GCS_ENABLED:
+                source = "Google Cloud Storage (GCS)"
+            elif GDRIVE_ENABLED:
+                source = "Google Drive"
+    
+    # Показываем соответствующий интерфейс в зависимости от выбранного источника
+    if source == "Google Drive" and GDRIVE_ENABLED:
+        return _render_gdrive_load()
+    elif source == "Google Cloud Storage (GCS)" and GCS_ENABLED:
+        result = _render_gcs_load()
+        # Сохраняем информацию об источнике
+        if result and result[0]:
+            safe_session_set("gdrive_load_source_info", f"gcs://{result[0]}")
+        return result
+    else:
+        # Если источник не определен или недоступен, показываем предупреждение
+        if not GDRIVE_ENABLED and not GCS_ENABLED:
+            st.warning("⚠️ Ни Google Drive, ни GCS не доступны.")
+        elif source == "Google Drive" and not GDRIVE_ENABLED:
+            st.error("❌ Google Drive недоступен")
+        elif source == "Google Cloud Storage (GCS)" and not GCS_ENABLED:
+            st.error("❌ Google Cloud Storage недоступен")
+        return None, {}
 
 
 def _render_gdrive_load() -> tuple:
-    """Рендерит секцию загрузки из Google Drive."""
+    """Рендерит секцию загрузки из Google Drive - только кнопка загрузки (поля ввода в sidebar)."""
     if not GDRIVE_ENABLED or not st:
         return None, {}
     
-    drive_folder_url = st.text_input(
-        "Ссылка на папку Google Drive",
-        placeholder="https://drive.google.com/drive/folders/1ABC123xyz...",
-        help="Вставьте ссылку на расшаренную папку с JSON файлами",
-        key="gdrive_load_folder_url"
-    )
+    st.markdown("---")
+    st.subheader("📥 Google Drive")
+    
+    # КРИТИЧНО: URL берем из session state (устанавливается в sidebar)
+    drive_folder_url = safe_session_get("gdrive_load_url", "")
     
     import os
     default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
     creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
     credentials = get_credentials(credentials_path=creds_path)
     
-    if not credentials:
-        # Пытаемся авторизоваться
-        if authorize_gdrive(creds_path):
-            # После успешной авторизации перезагружаем credentials
-            credentials = get_credentials(credentials_path=creds_path)
-        else:
-            # Если авторизация не удалась или не начата, показываем инструкции
-            pass
+    # Показываем информацию о текущих настройках
+    if drive_folder_url:
+        st.info(f"📂 Папка: `{drive_folder_url[:50]}...`" if len(drive_folder_url) > 50 else f"📂 Папка: `{drive_folder_url}`")
+    else:
+        st.info("👈 Введите ссылку на папку Google Drive в боковой панели")
     
-    if st.button("Загрузить из Google Drive", key="gdrive_load_button") and drive_folder_url:
-        if credentials:
-            # Создаем контейнер для логов с использованием session state
-            log_messages = safe_session_get("gdrive_log_messages", [])
-            log_messages.clear()  # Очищаем предыдущие логи
-            safe_session_set("gdrive_log_messages", log_messages)
-            
-            # Создаем контейнер для отображения логов
-            log_container = st.empty()
-            
-            def log_to_ui(message):
-                log_messages.append(message)
-                safe_session_set("gdrive_log_messages", log_messages)
-                # Используем markdown вместо text_area, чтобы избежать проблем с ключами
-                log_text = "\n".join(log_messages)
-                log_container.markdown(
-                    f"""
-                    <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;">
-                    <strong>📋 Лог загрузки:</strong><br/>
-                    <pre style="white-space: pre-wrap; margin: 0;">{log_text}</pre>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-            
-            with st.spinner("Загрузка файлов из Google Drive..."):
-                predictions = load_predictions_from_gdrive(
-                    drive_folder_url,
-                    credentials_path=creds_path,
-                    log_callback=log_to_ui
-                )
-            
-            if predictions:
-                st.success(f"✅ Загружено {len(predictions)} файлов из Google Drive")
-                # Сохраняем predictions в session state для использования в dashboard
-                # Конвертируем в формат domain.predictions_from_dict
-                try:
-                    from scale import domain
-                    predictions_converted = {}
-                    for name, data in predictions.items():
-                        predictions_converted[name] = domain.predictions_from_dict(data)
-                    
-                    # ОТЛАДКА: Логируем состояние ДО сохранения
-                    st.write("🔍 [DEBUG GDRIVE] Состояние ДО сохранения:")
-                    st.write(f"  - predictions_cloud в session: {safe_session_get('predictions_cloud', 'НЕТ')}")
-                    st.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
-                    st.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
-                    st.write(f"  - Количество конвертированных predictions: {len(predictions_converted)}")
-                    
-                    safe_session_set("predictions_cloud", predictions_converted)
-                    # Устанавливаем флаг использования cloud storage
-                    safe_session_set("use_cloud_storage", True)
-                    # Устанавливаем источник данных в селекторе
-                    if GDRIVE_ENABLED:
-                        safe_session_set("data_source", "Google Drive")
-                    elif GCS_ENABLED:
-                        safe_session_set("data_source", "Google Cloud Storage (GCS)")
-                    
-                    # ОТЛАДКА: Логируем состояние ПОСЛЕ сохранения
-                    st.write("🔍 [DEBUG GDRIVE] Состояние ПОСЛЕ сохранения:")
-                    st.write(f"  - predictions_cloud в session: {safe_session_get('predictions_cloud', 'НЕТ')}")
-                    st.write(f"  - use_cloud_storage: {safe_session_get('use_cloud_storage', False)}")
-                    st.write(f"  - data_source: {safe_session_get('data_source', 'НЕТ')}")
-                    st.write(f"  - Тип predictions_cloud: {type(safe_session_get('predictions_cloud', None))}")
-                    if safe_session_get('predictions_cloud', None):
-                        st.write(f"  - Ключи в predictions_cloud: {list(safe_session_get('predictions_cloud', {}).keys())[:5]}")
-                    
-                    # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
-                    # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
-                    safe_session_set("predictions_cloud", predictions_converted)
-                    safe_session_set("use_cloud_storage", True)
-                    if GDRIVE_ENABLED:
-                        safe_session_set("data_source", "Google Drive")
-                    elif GCS_ENABLED:
-                        safe_session_set("data_source", "Google Cloud Storage (GCS)")
-                    
-                    st.write("🔍 [DEBUG GDRIVE] Данные сохранены в session state:")
-                    st.write(f"  - Количество файлов: {len(predictions_converted)}")
-                    
-                    # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
-                    last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
-                    current_hash = hash(str(sorted(predictions_converted.keys())))
-                    
-                    if last_loaded_hash != current_hash:
-                        safe_session_set("gdrive_last_loaded_hash", current_hash)
-                        st.write("🔍 [DEBUG GDRIVE] Вызываю st.rerun()...")
-                        try:
-                            st.rerun()
-                        except:
-                            st.experimental_rerun()
-                    else:
-                        st.write("🔍 [DEBUG GDRIVE] Данные уже загружены, пропускаю rerun")
-                except Exception as e:
-                    st.error(f"Ошибка при обработке данных из Google Drive: {e}")
-                return drive_folder_url, predictions
-            else:
-                st.warning("⚠️ Не найдено JSON файлов в указанной папке")
+    # КРИТИЧНО: ВСЕГДА показываем кнопку загрузки, даже если данные уже загружены
+    # Это позволяет пользователю перезагрузить данные или загрузить другие данные
+    load_button_clicked = st.button("📥 Загрузить из Google Drive", key="gdrive_load_button", type="primary")
+    
+    # Проверяем наличие URL и credentials только при нажатии кнопки
+    if load_button_clicked:
+        if not drive_folder_url:
+            st.error("❌ Пожалуйста, введите ссылку на папку Google Drive в боковой панели")
+            return None, {}
+        
+        if not credentials:
+            st.error("❌ Требуется авторизация Google Drive. Используйте кнопку авторизации в боковой панели.")
+            return None, {}
+        # Устанавливаем флаг, что загрузка была запрошена
+        safe_session_set("gdrive_load_triggered", True)
+        safe_session_set("gdrive_load_url", drive_folder_url)
+        logger.debug(f"[GDRIVE] Кнопка нажата, начинаю загрузку из: {drive_folder_url}")
+        
+        # Создаем прогрессбар
+        progress_bar = st.progress(0)
+        progress_text = st.empty()
+        
+        def log_to_ui(message):
+            # Парсим прогресс из сообщений типа "[1/36]" или "📥 Начинаю загрузку 36 JSON файлов..."
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', message)
+            if progress_match:
+                current = int(progress_match.group(1))
+                total = int(progress_match.group(2))
+                progress = current / total if total > 0 else 0
+                progress_bar.progress(progress)
+                progress_text.text(f"📥 Загрузка файлов: {current}/{total}")
+            elif "Начинаю загрузку" in message:
+                total_match = re.search(r'(\d+)\s+JSON файлов', message)
+                if total_match:
+                    total = int(total_match.group(1))
+                    progress_text.text(f"📥 Найдено файлов: {total}")
+        
+        predictions = load_predictions_from_gdrive(
+            drive_folder_url,
+            credentials_path=creds_path,
+            log_callback=log_to_ui
+        )
+        
+        # Завершаем прогрессбар
+        progress_bar.progress(1.0)
+        if predictions:
+            progress_text.text(f"✅ Загружено {len(predictions)} файлов")
+        else:
+            progress_text.text("⚠️ Файлы не найдены")
+        
+        if predictions:
+            st.success(f"✅ Загружено {len(predictions)} файлов из Google Drive")
+            # Сохраняем predictions в session state для использования в dashboard
+            # Конвертируем в формат domain.predictions_from_dict
+            try:
+                from scale import domain
+                predictions_converted = {}
+                for name, data in predictions.items():
+                    predictions_converted[name] = domain.predictions_from_dict(data)
+                
+                # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
+                # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
+                safe_session_set("predictions_cloud", predictions_converted)
+                safe_session_set("use_cloud_storage", True)
+                safe_session_set("data_source", "Google Drive")
+                
+                # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
+                last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
+                current_hash = hash(str(sorted(predictions_converted.keys())))
+                
+                if last_loaded_hash != current_hash:
+                    safe_session_set("gdrive_last_loaded_hash", current_hash)
+                    # Сбрасываем флаг загрузки
+                    safe_session_set("gdrive_load_triggered", False)
+                    st.success("✅ Данные загружены и готовы к использованию!")
+                    logger.debug(f"[GDRIVE] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
+                else:
+                    st.info("ℹ️ Данные уже загружены ранее")
+                    # Сбрасываем флаг, так как данные уже были загружены
+                    safe_session_set("gdrive_load_triggered", False)
+                
+                # Возвращаем данные - они будут использованы в dashboard
+                return drive_folder_url, predictions_converted
+            except Exception as e:
+                st.error(f"Ошибка при обработке данных из Google Drive: {e}")
                 return drive_folder_url, {}
         else:
-            st.error("❌ Требуется авторизация Google Drive. Используйте кнопку авторизации выше.")
+            st.warning("⚠️ Не найдено JSON файлов в указанной папке")
             return drive_folder_url, {}
+    
+    # КРИТИЧНО: Если данные уже загружены, возвращаем их, но интерфейс все равно показывается выше
+    # Это позволяет пользователю видеть интерфейс и загружать другие данные
+    # Кнопка уже была показана выше, поэтому она всегда видна
+    existing_predictions = safe_session_get("predictions_cloud", None)
+    if existing_predictions and len(existing_predictions) > 0:
+        # Проверяем, что это данные из Google Drive (не из GCS)
+        current_data_source = safe_session_get("data_source", None)
+        if current_data_source == "Google Drive":
+            # Показываем информацию о загруженных данных
+            st.info(f"✅ Данные уже загружены: {len(existing_predictions)} файлов. Вы можете загрузить другие данные, нажав кнопку выше.")
+            return drive_folder_url, existing_predictions
     
     return None, {}
 
 
 def _render_gcs_load() -> tuple:
-    """Рендерит секцию загрузки из Google Cloud Storage."""
+    """Рендерит секцию загрузки из Google Cloud Storage - только кнопка загрузки (поля ввода в sidebar)."""
     if not GCS_ENABLED or not st:
         return None, {}
     
+    st.markdown("---")
+    st.subheader("📥 Google Cloud Storage")
+    
     st.info("⚡ **GCS быстрее на Cloud Run!** Используйте GCS для лучшей производительности.")
     
-    # Проверка авторизации
-    try:
-        from google.cloud import storage
-        client = storage.Client()
-        # Пробуем получить список проектов для проверки авторизации
+    # КРИТИЧНО: bucket_name берем из session state (устанавливается в sidebar)
+    bucket_name = safe_session_get("gcs_bucket_name", "scalebucket")
+    
+    # Prefix не используется - всегда пустая строка
+    prefix = ""
+    
+    # Показываем информацию о текущих настройках
+    if bucket_name:
+        st.info(f"📦 Bucket: `{bucket_name}`")
+    else:
+        st.info("👈 Введите имя GCS bucket в боковой панели")
+    
+    # КРИТИЧНО: ВСЕГДА показываем кнопку загрузки, даже если данные уже загружены
+    # Это позволяет пользователю перезагрузить данные или загрузить другие данные
+    load_button_clicked = st.button("📥 Загрузить из GCS", key="gcs_load_button", type="primary")
+    
+    # Проверяем наличие bucket и авторизации только при нажатии кнопки
+    if load_button_clicked:
+        if not bucket_name:
+            st.error("❌ Пожалуйста, введите имя GCS bucket в боковой панели")
+            return None, {}
+        
+        # Проверка авторизации
+        auth_ok = False
         try:
-            _ = list(client.list_buckets(max_results=1))
-            auth_ok = True
+            from google.cloud import storage
+            client = storage.Client()
+            try:
+                _ = list(client.list_buckets(max_results=1))
+                auth_ok = True
+            except Exception:
+                auth_ok = False
         except Exception:
             auth_ok = False
-    except Exception:
-        auth_ok = False
+        
+        if not auth_ok:
+            st.error("❌ Требуется авторизация GCS. См. инструкции в боковой панели.")
+            return None, {}
+        
+        # Устанавливаем флаг, что загрузка была запрошена
+        safe_session_set("gcs_load_triggered", True)
+        safe_session_set("gcs_load_bucket", bucket_name)
+        logger.debug(f"[GCS] Кнопка нажата, начинаю загрузку из bucket: {bucket_name}")
+        # Вызываем загрузку сразу (prefix всегда пустой)
+        return _load_from_gcs(bucket_name, "")
     
-    if not auth_ok:
-        st.warning("⚠️ **Требуется авторизация GCS**")
-        with st.expander("🔧 Как настроить авторизацию"):
-            st.markdown("""
-            **Вариант 1 (для локальной разработки):**
-            ```bash
-            gcloud auth application-default login
-            ```
-            
-            **Вариант 2 (для Cloud Run / Service Account):**
-            ```bash
-            export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
-            ```
-            
-            **Вариант 3 (если используете gcloud):**
-            ```bash
-            gcloud auth login
-            gcloud config set project YOUR_PROJECT_ID
-            ```
-            
-            После настройки перезапустите dashboard.
-            """)
-    
-    # Используем фиксированный ключ для bucket_name, но проверяем session state
-    bucket_name_default = safe_session_get("gcs_bucket_name", "scalebucket")
-    bucket_name = st.text_input(
-        "Имя GCS bucket",
-        value=bucket_name_default,
-        placeholder="scalebucket",
-        help="Имя вашего Google Cloud Storage bucket",
-        key="gcs_bucket_name_input"
-    )
-    # Сохраняем значение в session state
-    if bucket_name:
-        safe_session_set("gcs_bucket_name", bucket_name)
-    
-    prefix = st.text_input(
-        "Префикс пути (опционально)",
-        placeholder="",
-        help="Префикс для поиска файлов в bucket (например, 'data/predictions/'). Оставьте пустым для корня bucket.",
-        key="gcs_prefix"
-    )
-    
-    if st.button("Загрузить из GCS", key="gcs_load_button") and bucket_name:
-        return _load_from_gcs(bucket_name, prefix)
+    # КРИТИЧНО: Если данные уже загружены, возвращаем их, но интерфейс все равно показывается выше
+    # Это позволяет пользователю видеть интерфейс и загружать другие данные
+    # Кнопка уже была показана выше, поэтому она всегда видна
+    existing_predictions = safe_session_get("predictions_cloud", None)
+    if existing_predictions and len(existing_predictions) > 0:
+        # Проверяем, что это данные из GCS (не из Google Drive)
+        current_data_source = safe_session_get("data_source", None)
+        if current_data_source == "Google Cloud Storage (GCS)":
+            # Показываем информацию о загруженных данных
+            st.info(f"✅ Данные уже загружены: {len(existing_predictions)} файлов. Вы можете загрузить другие данные, нажав кнопку выше.")
+            return f"gcs://{bucket_name}", existing_predictions
     
     return None, {}
 
@@ -884,98 +849,76 @@ def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
     """Загружает данные из Google Cloud Storage."""
     from scale.gcs_integration import load_json_from_gcs_bucket
     
-    # Создаем контейнер для логов с использованием session state
-    log_messages = safe_session_get("gcs_log_messages", [])
-    log_messages.clear()  # Очищаем предыдущие логи
-    safe_session_set("gcs_log_messages", log_messages)
-    
-    # Создаем контейнер для отображения логов
-    log_container = st.empty()
+    # Создаем прогрессбар
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
     
     def log_to_ui(message):
-        log_messages.append(message)
-        safe_session_set("gcs_log_messages", log_messages)
-        # Используем markdown вместо text_area, чтобы избежать проблем с ключами
-        log_text = "\n".join(log_messages)
-        log_container.markdown(
-            f"""
-            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;">
-            <strong>📋 Лог загрузки из GCS:</strong><br/>
-            <pre style="white-space: pre-wrap; margin: 0;">{log_text}</pre>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        # Парсим прогресс из сообщений типа "[1/36]" или "📥 Начинаю загрузку 36 JSON файлов..."
+        progress_match = re.search(r'\[(\d+)/(\d+)\]', message)
+        if progress_match:
+            current = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+            progress = current / total if total > 0 else 0
+            progress_bar.progress(progress)
+            progress_text.text(f"📥 Загрузка файлов: {current}/{total}")
+        elif "Начинаю загрузку" in message:
+            total_match = re.search(r'(\d+)\s+JSON файлов', message)
+            if total_match:
+                total = int(total_match.group(1))
+                progress_text.text(f"📥 Найдено файлов: {total}")
     
-    with st.spinner("Загрузка файлов из Google Cloud Storage..."):
-        predictions = load_json_from_gcs_bucket(
-            bucket_name,
-            prefix=prefix,
-            log_callback=log_to_ui
-        )
+    predictions = load_json_from_gcs_bucket(
+        bucket_name,
+        prefix=prefix,
+        log_callback=log_to_ui
+    )
+    
+    # Завершаем прогрессбар
+    progress_bar.progress(1.0)
+    if predictions:
+        progress_text.text(f"✅ Загружено {len(predictions)} файлов")
+    else:
+        progress_text.text("⚠️ Файлы не найдены")
     
     if predictions:
         st.success(f"✅ Загружено {len(predictions)} файлов из GCS bucket")
         
-        # КРИТИЧНО: Сохраняем данные СРАЗУ, до конвертации и любых других операций
-        # Это гарантирует, что данные будут в session state даже если произойдет ошибка
+        # Сохраняем predictions в session state для использования в dashboard
+        # Конвертируем в формат domain.predictions_from_dict
         try:
             from scale import domain
             predictions_converted = {}
-            
-            # Конвертируем данные
-            st.write("🔄 Конвертация данных...")
             for name, data in predictions.items():
-                try:
-                    predictions_converted[name] = domain.predictions_from_dict(data)
-                except Exception as e:
-                    st.warning(f"⚠️ Ошибка при конвертации {name}: {e}")
-                    # Сохраняем сырые данные, если конвертация не удалась
-                    predictions_converted[name] = data
+                predictions_converted[name] = domain.predictions_from_dict(data)
             
-            # КРИТИЧНО: Сохраняем данные в session state ПЕРЕД любыми st.write()
+            # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
+            # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
             safe_session_set("predictions_cloud", predictions_converted)
             safe_session_set("use_cloud_storage", True)
-            if GCS_ENABLED:
-                safe_session_set("data_source", "Google Cloud Storage (GCS)")
-            elif GDRIVE_ENABLED:
-                safe_session_set("data_source", "Google Drive / GCS")
+            safe_session_set("data_source", "Google Cloud Storage (GCS)")
             
-            # Проверяем, что данные действительно сохранены
-            saved_predictions = safe_session_get("predictions_cloud", None)
-            if saved_predictions:
-                st.success(f"✅ Данные сохранены в session state: {len(saved_predictions)} файлов")
-                st.write(f"🔍 [DEBUG GCS] Первые ключи: {list(saved_predictions.keys())[:3]}")
-            else:
-                st.error("❌ ОШИБКА: Данные не сохранились в session state!")
-            
-            # КРИТИЧНО: Проверяем хеш перед rerun
+            # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
             last_loaded_hash = safe_session_get("gcs_last_loaded_hash", None)
             current_hash = hash(str(sorted(predictions_converted.keys())))
             
             if last_loaded_hash != current_hash:
                 safe_session_set("gcs_last_loaded_hash", current_hash)
-                # КРИТИЧНО: Используем st.experimental_rerun() вместо st.rerun()
-                # Это более мягкий способ обновления, который лучше сохраняет состояние
-                st.success("✅ Данные загружены! Обновляю интерфейс...")
-                # Используем JavaScript для мягкого обновления страницы
-                st.markdown("<script>setTimeout(function(){window.location.reload();}, 500);</script>", unsafe_allow_html=True)
+                # Сбрасываем флаг загрузки
+                safe_session_set("gcs_load_triggered", False)
+                st.success("✅ Данные загружены и готовы к использованию!")
+                logger.debug(f"[GCS] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
             else:
                 st.info("ℹ️ Данные уже загружены ранее")
-                
+                # Сбрасываем флаг, так как данные уже были загружены
+                safe_session_set("gcs_load_triggered", False)
+            
+            # Возвращаем данные - они будут использованы в dashboard
+            return f"gcs://{bucket_name}", predictions_converted
         except Exception as e:
-            st.error(f"❌ Ошибка при обработке данных из GCS: {e}")
-            import traceback
-            st.error(f"Traceback: {traceback.format_exc()}")
-            # Пытаемся сохранить сырые данные хотя бы
-            try:
-                safe_session_set("predictions_cloud", predictions)
-                safe_session_set("use_cloud_storage", True)
-                st.warning("⚠️ Сохранены сырые данные без конвертации")
-            except:
-                pass
-        return f"gcs://{bucket_name}/{prefix}", predictions
+            st.error(f"Ошибка при обработке данных из GCS: {e}")
+            return f"gcs://{bucket_name}", {}
     else:
-        st.warning("⚠️ Не найдено JSON файлов в указанном bucket/prefix")
-        return f"gcs://{bucket_name}/{prefix}", {}
+        st.warning("⚠️ Не найдено JSON файлов в указанном bucket")
+        return f"gcs://{bucket_name}", {}
 

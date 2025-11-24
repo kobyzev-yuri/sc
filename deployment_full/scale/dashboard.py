@@ -44,7 +44,6 @@ from scale.dashboard_common import (
     safe_session_set,
     safe_session_del,
     safe_session_has,
-    load_predictions_from_upload,
     load_predictions_from_files,
     load_predictions_from_gdrive,
     render_gdrive_upload_section,
@@ -204,7 +203,7 @@ def render_dashboard():
         use_gdrive = safe_session_get("use_gdrive", False)
         
         # Формируем список опций
-        data_source_options = ["Загрузить файлы", "Использовать директорию", "Использовать данные из эксперимента"]
+        data_source_options = ["Использовать директорию", "Использовать данные из эксперимента"]
         if GDRIVE_ENABLED or GCS_ENABLED:
             # Если доступен хотя бы один из источников, добавляем опцию
             if GDRIVE_ENABLED and GCS_ENABLED:
@@ -247,9 +246,9 @@ def render_dashboard():
             else:
                 default_index = len(data_source_options) - 1
         elif use_exp:
-            default_index = 2
-        elif use_dir:
             default_index = 1
+        elif use_dir:
+            default_index = 0
         else:
             default_index = 0
         
@@ -280,6 +279,91 @@ def render_dashboard():
                 elif GDRIVE_ENABLED:
                     data_source = "Google Drive / GCS"
                     safe_session_set("data_source", data_source)
+        
+        # Поля ввода для Google Drive и GCS в sidebar (левая панель)
+        if use_gdrive_data:
+            st.markdown("---")
+            st.subheader("📥 Google Drive")
+            saved_url = safe_session_get("gdrive_load_url", "")
+            drive_folder_url = st.text_input(
+                "Ссылка на папку Google Drive",
+                value=saved_url if saved_url else "",
+                placeholder="https://drive.google.com/drive/folders/1ABC123xyz...",
+                help="Вставьте ссылку на расшаренную папку с JSON файлами",
+                key="gdrive_load_folder_url_sidebar"
+            )
+            # Сохраняем URL в session state
+            if drive_folder_url:
+                safe_session_set("gdrive_load_url", drive_folder_url)
+            
+            # Проверка авторизации Google Drive
+            import os
+            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+            creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+            from scale.dashboard_common import get_credentials
+            credentials = get_credentials(credentials_path=creds_path)
+            
+            # Показываем кнопку авторизации, если нужно
+            if not credentials:
+                st.warning("⚠️ Требуется авторизация Google Drive")
+                if st.button("🔐 Авторизоваться в Google Drive", key="gdrive_authorize_button_sidebar"):
+                    from scale.dashboard_common import authorize_gdrive
+                    if authorize_gdrive(creds_path):
+                        st.success("✅ Авторизация успешна!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Ошибка авторизации")
+        
+        if use_cloud_storage_data:
+            st.markdown("---")
+            st.subheader("📥 Google Cloud Storage")
+            bucket_name_default = safe_session_get("gcs_bucket_name", "scalebucket")
+            bucket_name = st.text_input(
+                "Имя GCS bucket",
+                value=bucket_name_default,
+                placeholder="scalebucket",
+                help="Имя вашего Google Cloud Storage bucket",
+                key="gcs_bucket_name_input_sidebar"
+            )
+            # Сохраняем значение в session state
+            if bucket_name:
+                safe_session_set("gcs_bucket_name", bucket_name)
+            
+            # Проверка авторизации GCS
+            auth_ok = False
+            try:
+                from google.cloud import storage
+                client = storage.Client()
+                try:
+                    _ = list(client.list_buckets(max_results=1))
+                    auth_ok = True
+                except Exception:
+                    auth_ok = False
+            except Exception:
+                auth_ok = False
+            
+            if not auth_ok:
+                st.warning("⚠️ **Требуется авторизация GCS**")
+                with st.expander("🔧 Как настроить авторизацию"):
+                    st.markdown("""
+                    **Вариант 1 (для локальной разработки):**
+                    ```bash
+                    gcloud auth application-default login
+                    ```
+                    
+                    **Вариант 2 (для Cloud Run / Service Account):**
+                    ```bash
+                    export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+                    ```
+                    
+                    **Вариант 3 (если используете gcloud):**
+                    ```bash
+                    gcloud auth login
+                    gcloud config set project YOUR_PROJECT_ID
+                    ```
+                    
+                    После настройки перезапустите dashboard.
+                    """)
         
         # Безопасное сохранение в session_state
         safe_session_set("use_directory", use_default_data)
@@ -513,79 +597,12 @@ def render_dashboard():
                 st.info("💡 Сначала запустите подбор признаков для создания эксперимента")
                 use_experiment_data = False
 
-        uploaded_files = None
-        if not use_default_data and not use_experiment_data and not use_gdrive_data and not use_cloud_storage_data:
-            # Выбор директории для загрузки файлов
-            st.subheader("📁 Выбор директории для загрузки")
-            
-            # Предустановленные директории
-            default_upload_dirs = [
-                "results/predictions",
-                "test/predictions",
-                "scale_results/predictions",
-            ]
-            
-            # Выбор из предустановленных или ввод своего пути
-            upload_dir_option = st.radio(
-                "Выберите директорию для загрузки:",
-                ["Предустановленная", "Своя директория"],
-                index=0,
-                key="upload_dir_option"
-            )
-            
-            if upload_dir_option == "Предустановленная":
-                selected_upload_dir = st.selectbox(
-                    "Выберите директорию:",
-                    default_upload_dirs,
-                    index=0,
-                    key="selected_upload_dir"
-                )
-                upload_dir = Path(selected_upload_dir)
-            else:
-                custom_upload_dir = st.text_input(
-                    "Введите путь к директории:",
-                    value="results/predictions",
-                    placeholder="например: test/predictions",
-                    key="custom_upload_dir"
-                )
-                upload_dir = Path(custom_upload_dir)
-            
-            # Создаем директорию, если её нет
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            
-            st.info(f"📁 **Директория для загрузки:** `{upload_dir}`")
-            st.caption("Загруженные файлы будут сохранены в эту директорию")
-            
-            uploaded_files = st.file_uploader(
-                f"Загрузите JSON файлы с предсказаниями (будут сохранены в {upload_dir})",
-                type=["json"],
-                accept_multiple_files=True,
-            )
-            
-            # Сохраняем загруженные файлы в директорию
-            if uploaded_files:
-                saved_count = 0
-                for uploaded_file in uploaded_files:
-                    try:
-                        file_path = upload_dir / uploaded_file.name
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        saved_count += 1
-                    except Exception as e:
-                        st.error(f"Ошибка при сохранении {uploaded_file.name}: {e}")
-                
-                if saved_count > 0:
-                    st.success(f"✅ Сохранено {saved_count} файлов в {upload_dir}")
-                    # Обновляем выбранную директорию на директорию загрузки
-                    safe_session_set("predictions_dir", str(upload_dir))
-                    safe_session_set("use_directory", True)
-                    st.rerun()
-        
         elif use_gdrive_data or use_cloud_storage_data:
             # Используем общую функцию для загрузки из Google Drive или GCS
             # Данные уже обрабатываются и сохраняются в session state внутри render_gdrive_load_section
             # Поэтому просто вызываем функцию - она сама обработает данные и вызовет rerun при необходимости
-            source_info, cloud_predictions = render_gdrive_load_section()
+            data_source_selected = "Google Drive" if use_gdrive_data else "Google Cloud Storage (GCS)"
+            source_info, cloud_predictions = render_gdrive_load_section(data_source_selected=data_source_selected)
             # Данные уже сохранены в session state внутри render_gdrive_load_section
             # Не нужно обрабатывать их здесь, чтобы избежать дублирования
         
@@ -855,20 +872,44 @@ def render_dashboard():
                     safe_session_set("predictions_dir_cache", str(predictions_dir))
     
     elif use_gdrive_data:
-        # Загрузка из Google Drive
-        gdrive_predictions = safe_session_get("predictions_gdrive", None)
-        if gdrive_predictions:
-            predictions = gdrive_predictions
-            # Сохраняем в кэш
-            safe_session_set("predictions_gdrive_cache", predictions)
-    
-    elif use_cloud_storage_data:
-        # Загрузка из Google Drive или GCS (через render_gdrive_load_section)
+        # Загрузка из Google Drive (через render_gdrive_load_section)
+        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
+        # Сначала проверяем session state для использования уже загруженных данных
         cloud_predictions = safe_session_get("predictions_cloud", None)
-        if cloud_predictions:
+        if cloud_predictions and len(cloud_predictions) > 0:
             predictions = cloud_predictions
             # Сохраняем в кэш для использования ниже
             safe_session_set("predictions_cloud_cache", predictions)
+            st.info(f"✅ Используются данные из Google Drive: {len(predictions)} файлов")
+        
+        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
+        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected="Google Drive")
+        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        if cloud_predictions_new and len(cloud_predictions_new) > 0:
+            predictions = cloud_predictions_new
+            safe_session_set("predictions_cloud_cache", predictions)
+            # Обновляем cloud_predictions для использования ниже
+            cloud_predictions = cloud_predictions_new
+    
+    elif use_cloud_storage_data:
+        # Загрузка из Google Drive или GCS (через render_gdrive_load_section)
+        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
+        # Сначала проверяем session state для использования уже загруженных данных
+        cloud_predictions = safe_session_get("predictions_cloud", None)
+        if cloud_predictions and len(cloud_predictions) > 0:
+            predictions = cloud_predictions
+            # Сохраняем в кэш для использования ниже
+            safe_session_set("predictions_cloud_cache", predictions)
+            st.info(f"✅ Используются данные из облачного хранилища: {len(predictions)} файлов")
+        
+        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
+        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected="Google Cloud Storage (GCS)")
+        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        if cloud_predictions_new and len(cloud_predictions_new) > 0:
+            predictions = cloud_predictions_new
+            safe_session_set("predictions_cloud_cache", predictions)
+            # Обновляем cloud_predictions для использования ниже
+            cloud_predictions = cloud_predictions_new
     
     # ВАЖНО: Проверяем, есть ли загруженные данные из GCS/GDrive ПЕРЕД проверкой других источников
     # Это нужно для случая, когда данные загружены, но источник не выбран в селекторе
@@ -886,20 +927,6 @@ def render_dashboard():
                     safe_session_set("data_source", "Google Cloud Storage (GCS)")
                 elif GDRIVE_ENABLED:
                     safe_session_set("data_source", "Google Drive")
-
-    elif uploaded_files:
-        # Для загруженных файлов используем хэш имен файлов как ключ кэша
-        files_hash = hash(tuple(sorted([f.name for f in uploaded_files])))
-        predictions_cache_key = f"predictions_uploaded_{files_hash}"
-        
-        if safe_session_has(predictions_cache_key):
-            predictions = safe_session_get(predictions_cache_key)
-        else:
-            # Загрузка предсказаний из загруженных файлов
-            with st.spinner("Загрузка предсказаний..."):
-                predictions = load_predictions_from_upload(uploaded_files)
-                # Сохраняем в кэш
-                safe_session_set(predictions_cache_key, predictions)
 
     # Загрузка данных из эксперимента (если выбран этот источник)
     if use_experiment_data and safe_session_has("experiment_dir"):
