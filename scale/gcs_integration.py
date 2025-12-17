@@ -44,15 +44,20 @@ def _get_gcs_client(log_callback: Optional[callable] = None):
     
     # Если переменная не установлена, ищем в стандартных местах
     if not service_account_path or not os.path.exists(service_account_path):
+        # Получаем абсолютный путь к текущей рабочей директории (для Docker это /app)
+        current_dir = os.getcwd()
         possible_paths = [
+            os.path.join(current_dir, '.config', 'gcs', 'service-account-key.json'),  # Для Docker образа (/app/.config/gcs/)
+            os.path.join('.config', 'gcs', 'service-account-key.json'),  # Относительный путь
             os.path.join(os.path.expanduser('~'), '.config', 'gcs', 'service-account-key.json'),
             '/mnt/ai/cnn/.config/gcs/service-account-key.json',
             os.path.join(os.path.expanduser('~'), 'service-account-key.json'),
         ]
         
         for path in possible_paths:
-            if os.path.exists(path):
-                service_account_path = path
+            abs_path = os.path.abspath(path)
+            if os.path.exists(abs_path):
+                service_account_path = abs_path
                 break
     
     # Используем service account key если найден
@@ -249,17 +254,52 @@ def download_file_from_gcs(
             else:
                 print(log_msg)
             
-            # Скачиваем файл
-            content = blob.download_as_text()
+            # Скачиваем файл с таймаутом
+            import time
+            FILE_DOWNLOAD_TIMEOUT = 60  # 60 секунд на файл для Cloud Run
             
-            log_msg = f"✅ Загружен: {blob_name} ({len(content)} символов)"
-            if log_callback:
-                log_callback(log_msg)
-            else:
-                print(log_msg)
+            start_time = time.time()
             
-            return content
+            # Используем download_as_bytes() для лучшего контроля таймаута
+            try:
+                # Проверяем размер файла перед загрузкой
+                blob.reload()
+                file_size_mb = blob.size / (1024 * 1024) if blob.size else 0
+                
+                # Для больших файлов (>10MB) увеличиваем таймаут
+                if file_size_mb > 10:
+                    FILE_DOWNLOAD_TIMEOUT = min(120, int(file_size_mb * 2))  # До 2 секунд на MB, максимум 120 секунд
+                
+                # Загружаем файл
+                content_bytes = blob.download_as_bytes()
+                
+                elapsed = time.time() - start_time
+                if elapsed > FILE_DOWNLOAD_TIMEOUT:
+                    raise TimeoutError(f"Загрузка файла {blob_name} превысила таймаут {FILE_DOWNLOAD_TIMEOUT} секунд")
+                
+                content = content_bytes.decode('utf-8')
+                log_msg = f"✅ Загружен: {blob_name} ({len(content)} символов, {elapsed:.1f}s)"
+                if log_callback:
+                    log_callback(log_msg)
+                else:
+                    print(log_msg)
+                
+                return content
+            except TimeoutError:
+                raise
+            except Exception as e:
+                elapsed = time.time() - start_time
+                if elapsed > FILE_DOWNLOAD_TIMEOUT:
+                    raise TimeoutError(f"Загрузка файла {blob_name} превысила таймаут {FILE_DOWNLOAD_TIMEOUT} секунд: {e}")
+                raise
         
+        except TimeoutError as e:
+            error_msg = f"⏱️ Таймаут при скачивании файла {blob_name}: {e}"
+            if log_callback:
+                log_callback(error_msg)
+            else:
+                print(error_msg)
+            return None
         except Exception as e:
             error_msg = f"❌ Ошибка при скачивании файла {blob_name}: {e}"
             if log_callback:
@@ -316,18 +356,47 @@ def load_json_from_gcs_bucket(
         return {}
     
     # Загружаем данные из каждого файла
+    # КРИТИЧНО: Восстанавливаем частично загруженные данные из session state (если есть)
+    # Это позволяет продолжить загрузку после rerun
     predictions = {}
     
+    # КРИТИЧНО: Проверяем, есть ли частично загруженные данные в session state
+    # Это позволяет продолжить загрузку после rerun
+    try:
+        import streamlit as st
+        partial_predictions_key = f"gcs_partial_predictions_{bucket_name}_{prefix}"
+        if hasattr(st, 'session_state') and partial_predictions_key in st.session_state:
+            predictions = st.session_state[partial_predictions_key].copy()
+            loaded_count = len(predictions)
+            log_msg = f"📥 Продолжаю загрузку: уже загружено {loaded_count} из {len(files)} файлов..."
+            if log_callback:
+                log_callback(log_msg)
+            else:
+                print(log_msg)
+    except Exception:
+        pass
+    
     total_files = len(files)
-    log_msg = f"📥 Начинаю загрузку {total_files} JSON файлов..."
-    if log_callback:
-        log_callback(log_msg)
-    else:
-        print(log_msg)
+    if len(predictions) == 0:
+        log_msg = f"📥 Начинаю загрузку {total_files} JSON файлов..."
+        if log_callback:
+            log_callback(log_msg)
+        else:
+            print(log_msg)
+    
+    # Определяем, какие файлы уже загружены
+    loaded_file_names = set(predictions.keys())
     
     for idx, file_info in enumerate(files, 1):
         blob_name = file_info['name']
         file_name = Path(blob_name).stem  # Без расширения
+        
+        # Пропускаем уже загруженные файлы
+        if file_name in loaded_file_names:
+            log_msg = f"⏭️  [{idx}/{total_files}] Пропущен (уже загружен): {blob_name}"
+            if log_callback:
+                log_callback(log_msg)
+            continue
         
         log_msg = f"📄 [{idx}/{total_files}] Обработка файла: {blob_name}"
         if log_callback:
@@ -351,6 +420,16 @@ def load_json_from_gcs_bucket(
                     log_callback(log_msg)
                 else:
                     print(log_msg)
+                
+                # КРИТИЧНО: Сохраняем частично загруженные данные в session state после каждого файла
+                # Это позволяет сохранить прогресс при rerun
+                try:
+                    import streamlit as st
+                    if hasattr(st, 'session_state'):
+                        partial_predictions_key = f"gcs_partial_predictions_{bucket_name}_{prefix}"
+                        st.session_state[partial_predictions_key] = predictions.copy()
+                except Exception:
+                    pass  # Если streamlit недоступен, просто продолжаем
             except json.JSONDecodeError as e:
                 error_msg = f"❌ [{idx}/{total_files}] Ошибка при парсинге JSON из {blob_name}: {e}"
                 if log_callback:
@@ -369,6 +448,16 @@ def load_json_from_gcs_bucket(
         log_callback(log_msg)
     else:
         print(log_msg)
+    
+    # КРИТИЧНО: Очищаем ключ частичной загрузки после успешной загрузки всех файлов
+    try:
+        import streamlit as st
+        if hasattr(st, 'session_state'):
+            partial_predictions_key = f"gcs_partial_predictions_{bucket_name}_{prefix}"
+            if len(predictions) == total_files and partial_predictions_key in st.session_state:
+                del st.session_state[partial_predictions_key]
+    except Exception:
+        pass
     
     return predictions
 

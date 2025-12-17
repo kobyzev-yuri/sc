@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import json
 import re
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional, TYPE_CHECKING, Any
 import io
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from google_auth_oauthlib.flow import Flow
@@ -91,6 +95,46 @@ def get_credentials(credentials_path: Optional[str] = None, token_path: Optional
     """
     if not GDRIVE_AVAILABLE:
         return None
+    
+    # КРИТИЧНО: Проверяем переменные окружения для credentials (для Cloud Run)
+    import os
+    import json
+    import base64
+    
+    # Инициализируем credentials_path, если он не передан
+    temp_creds_path = None
+    
+    # Сначала проверяем base64-encoded версию (более безопасно для передачи через командную строку)
+    credentials_b64 = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON_B64')
+    if credentials_b64:
+        try:
+            # Декодируем base64
+            credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
+            creds_data = json.loads(credentials_json)
+            # Создаем временный файл для credentials
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(creds_data, f)
+                temp_creds_path = f.name
+            credentials_path = temp_creds_path
+        except Exception as e:
+            logger.error(f"Ошибка при декодировании GOOGLE_DRIVE_CREDENTIALS_JSON_B64: {e}")
+    
+    # Fallback: проверяем обычную JSON строку
+    if not credentials_path:
+        credentials_json = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON')
+        if credentials_json:
+            try:
+                # Если credentials переданы как JSON строка в переменной окружения
+                creds_data = json.loads(credentials_json)
+                # Создаем временный файл для credentials
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    json.dump(creds_data, f)
+                    temp_creds_path = f.name
+                credentials_path = temp_creds_path
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге GOOGLE_DRIVE_CREDENTIALS_JSON: {e}")
     
     creds = None
     token_file = Path(token_path) if token_path else Path('.gdrive_token.json')
@@ -303,19 +347,35 @@ def download_file_from_drive(
         else:
             print(log_msg)
         
-        # Скачиваем файл
+        # Скачиваем файл с таймаутом
+        import time
         request = service.files().get_media(fileId=file_id)
         file_content = io.BytesIO()
         downloader = MediaIoBaseDownload(file_content, request)
         
+        # Таймаут для загрузки одного файла: 60 секунд (для Cloud Run)
+        # Для больших файлов может потребоваться больше времени
+        FILE_DOWNLOAD_TIMEOUT = 60
+        start_time = time.time()
+        
         done = False
         chunk_count = 0
         while not done:
-            status, done = downloader.next_chunk()
-            chunk_count += 1
-            if status and log_callback and chunk_count % 10 == 0:  # Логируем каждые 10 chunks
-                progress = int(status.progress() * 100)
-                log_callback(f"  📥 Прогресс: {progress}%")
+            # Проверка таймаута перед каждой итерацией
+            if time.time() - start_time > FILE_DOWNLOAD_TIMEOUT:
+                raise TimeoutError(f"Загрузка файла {actual_name} превысила таймаут {FILE_DOWNLOAD_TIMEOUT} секунд")
+            
+            try:
+                status, done = downloader.next_chunk()
+                chunk_count += 1
+                if status and log_callback and chunk_count % 10 == 0:  # Логируем каждые 10 chunks
+                    progress = int(status.progress() * 100)
+                    elapsed = time.time() - start_time
+                    log_callback(f"  📥 Прогресс: {progress}% ({elapsed:.1f}s)")
+            except Exception as e:
+                if time.time() - start_time > FILE_DOWNLOAD_TIMEOUT:
+                    raise TimeoutError(f"Загрузка файла {actual_name} превысила таймаут: {e}")
+                raise
         
         # Возвращаем содержимое как строку
         file_content.seek(0)
@@ -329,6 +389,13 @@ def download_file_from_drive(
         
         return content
     
+    except TimeoutError as e:
+        error_msg = f"⏱️ Таймаут при скачивании файла {display_name}: {e}"
+        if log_callback:
+            log_callback(error_msg)
+        else:
+            print(error_msg)
+        return None
     except HttpError as error:
         error_msg = f"❌ Ошибка при скачивании файла {display_name}: {error}"
         if log_callback:
@@ -545,19 +612,57 @@ def load_json_from_drive_folder(
         return {}
     
     # Загружаем данные из каждого файла
+    # КРИТИЧНО: Восстанавливаем частично загруженные данные из session state (если есть)
+    # Это позволяет продолжить загрузку после rerun
     predictions = {}
     
     if not credentials:
         credentials = get_credentials(credentials_path)
     
     total_files = len(files)
-    log_msg = f"📥 Начинаю загрузку {total_files} JSON файлов..."
-    if log_callback:
-        log_callback(log_msg)
-    else:
-        print(log_msg)
+    
+    # КРИТИЧНО: Проверяем, есть ли частично загруженные данные в session state
+    # Это позволяет продолжить загрузку после rerun
+    try:
+        import streamlit as st
+        partial_predictions_key = f"gdrive_partial_predictions_{folder_id}"
+        if hasattr(st, 'session_state') and partial_predictions_key in st.session_state:
+            predictions = st.session_state[partial_predictions_key].copy()
+            loaded_count = len(predictions)
+            log_msg = f"📥 Продолжаю загрузку: уже загружено {loaded_count} из {total_files} файлов..."
+            if log_callback:
+                log_callback(log_msg)
+            else:
+                print(log_msg)
+        else:
+            log_msg = f"📥 Начинаю загрузку {total_files} JSON файлов..."
+            if log_callback:
+                log_callback(log_msg)
+            else:
+                print(log_msg)
+    except Exception:
+        # Если streamlit недоступен, просто начинаем загрузку
+        log_msg = f"📥 Начинаю загрузку {total_files} JSON файлов..."
+        if log_callback:
+            log_callback(log_msg)
+        else:
+            print(log_msg)
+    
+    # Определяем, с какого файла начинать загрузку
+    loaded_file_names = set(predictions.keys())
+    start_idx = 1
     
     for idx, file_info in enumerate(files, 1):
+        file_id = file_info['id']
+        file_name = file_info['name']
+        file_name_stem = Path(file_name).stem  # Без расширения
+        
+        # Пропускаем уже загруженные файлы
+        if file_name_stem in loaded_file_names:
+            log_msg = f"⏭️  [{idx}/{total_files}] Пропущен (уже загружен): {file_name}"
+            if log_callback:
+                log_callback(log_msg)
+            continue
         file_id = file_info['id']
         file_name = file_info['name']
         file_name_stem = Path(file_name).stem  # Без расширения
@@ -586,6 +691,16 @@ def load_json_from_drive_folder(
                     log_callback(log_msg)
                 else:
                     print(log_msg)
+                
+                # КРИТИЧНО: Сохраняем частично загруженные данные в session state после каждого файла
+                # Это позволяет сохранить прогресс при rerun
+                try:
+                    import streamlit as st
+                    if hasattr(st, 'session_state'):
+                        partial_predictions_key = f"gdrive_partial_predictions_{folder_id}"
+                        st.session_state[partial_predictions_key] = predictions.copy()
+                except Exception:
+                    pass  # Если streamlit недоступен, просто продолжаем
             except json.JSONDecodeError as e:
                 error_msg = f"❌ [{idx}/{total_files}] Ошибка при парсинге JSON из {file_name}: {e}"
                 if log_callback:
@@ -604,6 +719,16 @@ def load_json_from_drive_folder(
         log_callback(log_msg)
     else:
         print(log_msg)
+    
+    # КРИТИЧНО: Очищаем ключ частичной загрузки после успешной загрузки всех файлов
+    try:
+        import streamlit as st
+        if hasattr(st, 'session_state'):
+            partial_predictions_key = f"gdrive_partial_predictions_{folder_id}"
+            if len(predictions) == total_files and partial_predictions_key in st.session_state:
+                del st.session_state[partial_predictions_key]
+    except Exception:
+        pass
     
     return predictions
 

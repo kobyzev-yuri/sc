@@ -840,6 +840,7 @@ def run_feature_selection_analysis(
     methods: Optional[List[str]] = None,
     train_set: Optional[str] = None,
     aggregation_version: Optional[str] = None,
+    use_all_relative_features: bool = False,
 ) -> pd.DataFrame:
     """
     Запускает полный анализ подбора признаков.
@@ -859,17 +860,27 @@ def run_feature_selection_analysis(
     # Загрузка данных
     print("\n1. Загрузка данных...")
     df = aggregate.load_predictions_batch(predictions_dir)
+    # Для стабильности результатов сортируем образцы по имени
+    if "image" in df.columns:
+        df = df.sort_values("image").reset_index(drop=True)
     print(f"   Загружено образцов: {len(df)}")
     
     # Создание относительных признаков
     print("\n2. Создание относительных признаков...")
     df_features = aggregate.create_relative_features(df)
-    print(f"   Создано признаков: {len(df_features.columns) - 1}")
+    print(f"   Всего относительных признаков: {len(df_features.columns) - 1}")
     
-    # Получение всех доступных признаков
-    df_all = aggregate.select_all_feature_columns(df_features)
-    candidate_features = [c for c in df_all.columns if c != 'image']
-    print(f"   Кандидатных признаков: {len(candidate_features)}")
+    # Получение признаков для анализа
+    if use_all_relative_features:
+        # Используем все относительные признаки всех патологий
+        df_all = df_features
+        candidate_features = [c for c in df_all.columns if c != 'image']
+        print("   Режим: ИСПОЛЬЗУЕМ ВСЕ относительные признаки (без ручного списка классов)")
+    else:
+        # Старый подход: фиксированный список признаков по классам
+        df_all = aggregate.select_all_feature_columns(df_features)
+        candidate_features = [c for c in df_all.columns if c != 'image']
+        print(f"   Кандидатных признаков (фиксированный список классов): {len(candidate_features)}")
     
     # Создание селектора
     print("\n3. Инициализация селектора признаков...")
@@ -898,8 +909,8 @@ def run_feature_selection_analysis(
             use_relative_features=True,
             auto_export_to_dashboard=False,  # НЕ экспортируем автоматически для безопасности
             df_aggregated=df,  # Агрегированные данные (абсолютные признаки)
-            df_features=df_features,  # Относительные признаки
-            df_all_features=df_all,  # Все доступные признаки
+            df_features=df_features,  # Относительные признаки (все классы)
+            df_all_features=df_all,  # Признаки, реально использованные в анализе
         )
         
         # Регистрируем эксперимент в трекере после экспорта

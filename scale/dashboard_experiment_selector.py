@@ -79,8 +79,13 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
                     # Загружаем детали эксперимента для получения признаков
                     exp_details = tracker.get_experiment_details(row['id'])
                     if exp_details:
+                        display_name = (
+                            f"{row['name']} | score={row['score']:.3f} | "
+                            f"sep={row['separation']:.3f} | n={int(row['n_features'])}"
+                        )
                         experiments.append({
                             'name': row['name'],
+                            'display_name': display_name,
                             'path': str(exp_dir),
                             'method': row['method'],
                             'score': float(row['score']),
@@ -131,14 +136,21 @@ def list_available_experiments(experiments_dir: Path = Path("experiments"), use_
                 with open(best_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 
+                score = config.get('metrics', {}).get('score', 0)
+                separation = config.get('metrics', {}).get('separation', 0)
+                n_features = len(config.get('selected_features', []))
+                display_name = (
+                    f"{exp_dir.name} | score={score:.3f} | sep={separation:.3f} | n={n_features}"
+                )
                 experiments.append({
                     'name': exp_dir.name,
+                    'display_name': display_name,
                     'path': str(exp_dir),
                     'method': config.get('method', 'unknown'),
-                    'score': config.get('metrics', {}).get('score', 0),
-                    'separation': config.get('metrics', {}).get('separation', 0),
+                    'score': score,
+                    'separation': separation,
                     'mod_norm': config.get('metrics', {}).get('mean_pc1_norm_mod', 0),
-                    'n_features': len(config.get('selected_features', [])),
+                    'n_features': n_features,
                     'features': config.get('selected_features', []),
                     'timestamp': config.get('timestamp', ''),
                     'train_set': 'unknown',

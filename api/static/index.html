@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathology Analysis API - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 30px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        input[type="text"], select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .progress-container {
+            margin: 10px 0;
+            background: #f0f0f0;
+            border-radius: 8px;
+            overflow: hidden;
+            height: 24px;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .progress-text {
+            padding: 5px 10px;
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        
+        .results h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .results pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .feature-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        
+        .feature-tag {
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .feature-tag:hover {
+            background: #5568d3;
+        }
+        
+        .feature-tag.selected {
+            background: #764ba2;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .metric-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #667eea;
+            text-align: center;
+        }
+        
+        .metric-card .label {
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .metric-card .value {
+            color: #333;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Pathology Analysis API</h1>
+        <p class="subtitle">Интерфейс для работы с API анализа патологий</p>
+        
+        <!-- Загрузка данных -->
+        <div class="section">
+            <h2>📥 Загрузка данных</h2>
+            <div class="form-group">
+                <label>Источник данных:</label>
+                <select id="dataSource">
+                    <option value="directory">Локальная директория</option>
+                    <option value="experiment">Использовать данные из эксперимента</option>
+                    <option value="gdrive">Google Drive</option>
+                    <option value="gcs">Google Cloud Storage</option>
+                </select>
+            </div>
+            <div class="form-group" id="pathGroup">
+                <label id="pathLabel">Путь к директории:</label>
+                <input type="text" id="dataPath" placeholder="results/predictions">
+            </div>
+            <div class="form-group hidden" id="experimentGroup">
+                <label>Выберите эксперимент:</label>
+                <select id="experimentSelect">
+                    <option value="">-- Загрузить список --</option>
+                </select>
+                <button onclick="loadExperimentsForSelection()" style="margin-top: 5px; padding: 5px 10px; font-size: 12px;">Обновить список</button>
+            </div>
+            <div class="form-group hidden" id="bucketGroup">
+                <label>Bucket name:</label>
+                <input type="text" id="bucketName" placeholder="scalebucket">
+            </div>
+            <div class="form-group hidden" id="prefixGroup">
+                <label>Prefix (опционально):</label>
+                <input type="text" id="prefix" placeholder="">
+            </div>
+            <button onclick="loadData()" id="loadBtn">Загрузить данные</button>
+            <div id="loadStatus"></div>
+            <div id="progressContainer" class="hidden" style="margin-top: 10px;">
+                <div class="progress-container">
+                    <div class="progress-bar" id="progressBar">0%</div>
+                </div>
+                <div class="progress-text" id="progressText">Инициализация...</div>
+            </div>
+        </div>
+        
+        <!-- Агрегация -->
+        <div class="section">
+            <h2>📊 Агрегация данных</h2>
+            <button onclick="aggregateData()" id="aggregateBtn" disabled>Агрегировать</button>
+            <div id="aggregateStatus"></div>
+            <div id="featuresList" class="hidden"></div>
+        </div>
+        
+        <!-- Оценка признаков -->
+        <div class="section">
+            <h2>🎯 Оценка признаков</h2>
+            <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                Выберите признаки для оценки (кликните на теги выше)
+            </p>
+            <button onclick="evaluateFeatures()" id="evaluateBtn" disabled>Оценить признаки</button>
+            <div id="evaluateStatus"></div>
+            <div id="metricsResults" class="hidden"></div>
+        </div>
+        
+        <!-- PCA Score -->
+        <div class="section">
+            <h2>📈 PCA Score</h2>
+            <button onclick="calculatePCAScore()" id="pcaBtn" disabled>Вычислить PCA Score</button>
+            <div id="pcaStatus"></div>
+            <div id="pcaResults" class="hidden"></div>
+        </div>
+        
+        <!-- Эксперименты -->
+        <div class="section">
+            <h2>🧪 Эксперименты</h2>
+            <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                Выберите эксперимент в разделе "Загрузка данных" для автоматической загрузки метрик, PCA и признаков.
+            </p>
+        </div>
+        
+        <!-- Спектральный анализ -->
+        <div class="section">
+            <h2>🌈 Создание спектра</h2>
+            <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                Создает спектр на основе PCA данных. Выберите признаки для PCA (кликните на теги выше).
+            </p>
+            <div class="form-group">
+                <label>Нижний процентиль:</label>
+                <input type="number" id="percentileLow" value="1.0" step="0.1" min="0" max="50">
+            </div>
+            <div class="form-group">
+                <label>Верхний процентиль:</label>
+                <input type="number" id="percentileHigh" value="99.0" step="0.1" min="50" max="100">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="useGMM" style="width: auto; margin-right: 5px;">
+                    Использовать GMM классификацию
+                </label>
+            </div>
+            <button onclick="createSpectrum()" id="spectrumBtn" disabled>Создать спектр</button>
+            <div id="spectrumStatus"></div>
+            <div id="spectrumResults" class="hidden"></div>
+        </div>
+        
+        <!-- Сохранение эксперимента -->
+        <div class="section">
+            <h2>💾 Сохранение эксперимента</h2>
+            <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                Сохраняет эксперимент со всеми компонентами в формате dashboard.
+            </p>
+            <div class="form-group">
+                <label>Имя эксперимента:</label>
+                <input type="text" id="experimentName" placeholder="experiment_20241124">
+            </div>
+            <button onclick="saveExperiment()" id="saveExperimentBtn" disabled>Сохранить эксперимент</button>
+            <div id="saveExperimentStatus"></div>
+        </div>
+        
+        <!-- Результаты -->
+        <div class="section">
+            <h2>📋 Результаты</h2>
+            <div id="results"></div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let currentCacheKey = null;
+        let currentDfFeaturesCacheKey = null;
+        let availableFeatures = [];
+        let selectedFeatures = [];
+        
+        // Обновление формы при смене источника данных
+        document.getElementById('dataSource').addEventListener('change', function() {
+            const source = this.value;
+            const pathGroup = document.getElementById('pathGroup');
+            const experimentGroup = document.getElementById('experimentGroup');
+            const bucketGroup = document.getElementById('bucketGroup');
+            const prefixGroup = document.getElementById('prefixGroup');
+            
+            if (source === 'experiment') {
+                pathGroup.classList.add('hidden');
+                experimentGroup.classList.remove('hidden');
+                bucketGroup.classList.add('hidden');
+                prefixGroup.classList.add('hidden');
+                // Загружаем список экспериментов при выборе этого источника
+                loadExperimentsForSelection();
+            } else if (source === 'gcs') {
+                pathGroup.classList.add('hidden');
+                experimentGroup.classList.add('hidden');
+                bucketGroup.classList.remove('hidden');
+                prefixGroup.classList.remove('hidden');
+            } else if (source === 'gdrive') {
+                pathGroup.classList.remove('hidden');
+                experimentGroup.classList.add('hidden');
+                bucketGroup.classList.add('hidden');
+                prefixGroup.classList.add('hidden');
+                document.getElementById('pathLabel').textContent = 'Google Drive URL:';
+            } else {
+                pathGroup.classList.remove('hidden');
+                experimentGroup.classList.add('hidden');
+                bucketGroup.classList.add('hidden');
+                prefixGroup.classList.add('hidden');
+                document.getElementById('pathLabel').textContent = 'Путь к директории:';
+            }
+        });
+        
+        async function loadExperimentsForSelection() {
+            const select = document.getElementById('experimentSelect');
+            select.innerHTML = '<option value="">Загрузка...</option>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/experiments?top_n=10`);
+                const data = await response.json();
+                
+                if (response.ok && data.experiments && data.experiments.length > 0) {
+                    select.innerHTML = '<option value="">-- Выберите эксперимент --</option>';
+                    data.experiments.forEach(exp => {
+                        const option = document.createElement('option');
+                        option.value = exp.name;
+                        option.textContent = `${exp.name} (Score: ${exp.score.toFixed(4)}, Features: ${exp.n_features})`;
+                        select.appendChild(option);
+                    });
+                } else {
+                    select.innerHTML = '<option value="">Нет доступных экспериментов</option>';
+                }
+            } catch (error) {
+                select.innerHTML = '<option value="">Ошибка загрузки</option>';
+            }
+        }
+        
+        async function loadData() {
+            const source = document.getElementById('dataSource').value;
+            const path = document.getElementById('dataPath').value;
+            const bucketName = document.getElementById('bucketName').value;
+            const prefix = document.getElementById('prefix').value;
+            const experimentName = document.getElementById('experimentSelect').value;
+            const statusDiv = document.getElementById('loadStatus');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const btn = document.getElementById('loadBtn');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Загрузка...';
+            statusDiv.innerHTML = '<div class="status loading">Загрузка данных...</div>';
+            
+            // Показываем прогресс-бар только для директорий и Google источников
+            const showProgress = (source === 'directory' || source === 'gdrive' || source === 'gcs');
+            if (showProgress) {
+                progressContainer.classList.remove('hidden');
+                progressBar.style.width = '0%';
+                progressBar.textContent = '0%';
+                progressText.textContent = 'Инициализация...';
+            } else {
+                progressContainer.classList.add('hidden');
+            }
+            
+            // Генерируем уникальный ID запроса для отслеживания прогресса
+            const requestId = Date.now().toString();
+            let progressInterval = null;
+            
+            // Запускаем опрос прогресса, если нужен прогресс-бар
+            if (showProgress) {
+                let lastProgress = 0;
+                progressInterval = setInterval(async () => {
+                    try {
+                        const progressResponse = await fetch(`${API_BASE}/api/v1/load-progress`);
+                        const progressData = await progressResponse.json();
+                        
+                        if (progressData.status === 'loading') {
+                            const progress = Math.round(progressData.progress * 100);
+                            if (progress >= lastProgress) {
+                                progressBar.style.width = `${progress}%`;
+                                progressBar.textContent = `${progress}%`;
+                                progressText.textContent = progressData.message || `Загружено ${progressData.current}/${progressData.total}`;
+                                lastProgress = progress;
+                            }
+                        } else if (progressData.status === 'completed') {
+                            clearInterval(progressInterval);
+                            progressBar.style.width = '100%';
+                            progressBar.textContent = '100%';
+                            progressText.textContent = 'Загрузка завершена';
+                        }
+                    } catch (e) {
+                        // Игнорируем ошибки опроса прогресса
+                    }
+                }, 300); // Опрашиваем каждые 300мс
+            }
+            
+            try {
+                const requestBody = {
+                    source: source,
+                    path: (source === 'gcs' || source === 'experiment') ? null : path,
+                    bucket_name: source === 'gcs' ? bucketName : null,
+                    prefix: source === 'gcs' ? prefix : null,
+                    experiment_name: source === 'experiment' ? experimentName : null,
+                    experiments_dir: source === 'experiment' ? 'experiments' : null
+                };
+                
+                if (source === 'experiment' && !experimentName) {
+                    throw new Error('Выберите эксперимент из списка');
+                }
+                
+                const response = await fetch(`${API_BASE}/api/v1/load-data`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                // Останавливаем опрос прогресса
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Завершаем прогресс-бар
+                    if (showProgress) {
+                        progressBar.style.width = '100%';
+                        progressBar.textContent = '100%';
+                        progressText.textContent = `✅ Загружено ${data.files_count || 0} файлов`;
+                    }
+                    
+                    currentCacheKey = data.cache_key || data.df_features_cache_key;
+                    
+                    if (source === 'experiment') {
+                        statusDiv.innerHTML = `<div class="status success">
+                            ✅ Загружены данные из эксперимента: ${data.experiment_name}<br>
+                            Образцов: ${data.files_count}<br>
+                            ${data.has_features ? '✅ Есть признаки' : ''} ${data.has_aggregated ? '✅ Есть агрегированные данные' : ''}
+                            ${data.has_pca ? '✅ Есть PCA данные' : ''} ${data.has_analyzer ? '✅ Есть analyzer' : ''}
+                        </div>`;
+                        
+                        // Для эксперимента данные уже агрегированы
+                        if (data.df_features_cache_key) {
+                            currentDfFeaturesCacheKey = data.df_features_cache_key;
+                            currentCacheKey = data.df_features_cache_key;
+                            
+                            // Загружаем конфигурацию эксперимента (признаки и метрики)
+                            if (data.experiment_config) {
+                                // Автоматически отмечаем признаки из эксперимента
+                                if (data.selected_features && data.selected_features.length > 0) {
+                                    selectedFeatures = data.selected_features;
+                                    
+                                    // Обновляем UI признаков после агрегации
+                                    setTimeout(() => {
+                                        // Отмечаем признаки в UI
+                                        const featureTags = document.querySelectorAll('.feature-tag');
+                                        featureTags.forEach(tag => {
+                                            if (selectedFeatures.includes(tag.textContent)) {
+                                                tag.classList.add('selected');
+                                            }
+                                        });
+                                        
+                                        // Активируем кнопки PCA и спектра, так как признаки выбраны
+                                        document.getElementById('evaluateBtn').disabled = false;
+                                        document.getElementById('pcaBtn').disabled = false;
+                                        document.getElementById('spectrumBtn').disabled = false;
+                                        
+                                        // Сохраняем метрики из эксперимента
+                                        if (data.metrics) {
+                                            window.currentMetrics = data.metrics;
+                                            
+                                            // Показываем метрики из эксперимента
+                                            const metricsDiv = document.getElementById('metricsResults');
+                                            if (metricsDiv) {
+                                                metricsDiv.classList.remove('hidden');
+                                                let html = `<h3>Метрики из эксперимента:</h3>`;
+                                                html += `<div class="metrics-grid">`;
+                                                html += `<div class="metric-card"><div class="label">Score</div><div class="value">${data.metrics.score?.toFixed(4) || 'N/A'}</div></div>`;
+                                                html += `<div class="metric-card"><div class="label">Separation</div><div class="value">${data.metrics.separation?.toFixed(4) || 'N/A'}</div></div>`;
+                                                if (data.metrics.explained_variance) {
+                                                    html += `<div class="metric-card"><div class="label">Explained Variance</div><div class="value">${(data.metrics.explained_variance * 100).toFixed(2)}%</div></div>`;
+                                                }
+                                                html += `</div>`;
+                                                html += `<pre>${JSON.stringify(data.metrics, null, 2)}</pre>`;
+                                                metricsDiv.innerHTML = html;
+                                            }
+                                        }
+                                        
+                                        // Загружаем PCA данные, если есть
+                                        if (data.has_pca && data.pca_cache_key) {
+                                            console.log('✅ Загрузка PCA данных из эксперимента:', data.pca_cache_key, 'образцов:', data.pca_samples_count);
+                                            // Загружаем PCA данные сразу при загрузке эксперимента
+                                            setTimeout(() => {
+                                                loadPCADataFromCache(data.pca_cache_key);
+                                                // После загрузки PCA автоматически вычисляем спектр
+                                                setTimeout(() => {
+                                                    if (selectedFeatures.length > 0) {
+                                                        console.log('🔄 Автоматическое вычисление спектра после загрузки PCA');
+                                                        createSpectrum();
+                                                    }
+                                                }, 1000);
+                                            }, 500);
+                                        } else {
+                                            console.log('⚠️ PCA данные не найдены в эксперименте, вычисляем автоматически');
+                                            // Если PCA данных нет, но есть признаки - вычисляем PCA автоматически
+                                            if (selectedFeatures.length > 0) {
+                                                setTimeout(() => {
+                                                    console.log('🔄 Автоматическое вычисление PCA для эксперимента');
+                                                    calculatePCAScore().then(() => {
+                                                        // После PCA автоматически вычисляем спектр
+                                                        setTimeout(() => {
+                                                            console.log('🔄 Автоматическое вычисление спектра после PCA');
+                                                            createSpectrum();
+                                                        }, 1000);
+                                                    });
+                                                }, 1000);
+                                            }
+                                        }
+                                    }, 1000);
+                                }
+                            }
+                            
+                            // Автоматически запускаем агрегацию для отображения признаков
+                            setTimeout(() => aggregateData(), 500);
+                        }
+                    } else {
+                        statusDiv.innerHTML = `<div class="status success">
+                            ✅ Загружено ${data.files_count} файлов<br>
+                            Примеры: ${data.sample_names ? data.sample_names.slice(0, 5).join(', ') : ''}...
+                        </div>`;
+                    }
+                    document.getElementById('aggregateBtn').disabled = false;
+                    
+                    // Активируем кнопки PCA и спектра, если признаки уже выбраны
+                    if (selectedFeatures.length > 0) {
+                        document.getElementById('evaluateBtn').disabled = false;
+                        document.getElementById('pcaBtn').disabled = false;
+                        document.getElementById('spectrumBtn').disabled = false;
+                    }
+                } else {
+                    throw new Error(data.detail || 'Ошибка загрузки');
+                }
+            } catch (error) {
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
+                if (showProgress) {
+                    progressBar.style.width = '0%';
+                    progressBar.textContent = '0%';
+                    progressText.textContent = 'Ошибка загрузки';
+                }
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Загрузить данные';
+            }
+        }
+        
+        async function aggregateData() {
+            if (!currentCacheKey) {
+                alert('Сначала загрузите данные');
+                return;
+            }
+            
+            const statusDiv = document.getElementById('aggregateStatus');
+            const btn = document.getElementById('aggregateBtn');
+            const featuresDiv = document.getElementById('featuresList');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Агрегация...';
+            statusDiv.innerHTML = '<div class="status loading">Агрегация данных...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/aggregate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        cache_key: currentCacheKey
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentDfFeaturesCacheKey = data.df_features_cache_key;
+                    availableFeatures = data.feature_columns;
+                    
+                    statusDiv.innerHTML = `<div class="status success">
+                        ✅ Агрегировано ${data.aggregated_rows} образцов<br>
+                        Найдено ${data.features_count} признаков
+                    </div>`;
+                    
+                    // Отображаем список признаков
+                    featuresDiv.classList.remove('hidden');
+                    featuresDiv.innerHTML = `
+                        <h3>Доступные признаки:</h3>
+                        <button onclick="downloadCSV('${data.df_features_cache_key}', 'features.csv')" style="margin-bottom: 10px;">📥 Скачать признаки CSV</button>
+                        <button onclick="downloadCSV('${data.df_cache_key}', 'aggregated_data.csv')" style="margin-bottom: 10px;">📥 Скачать агрегированные данные CSV</button>
+                        <div class="feature-list"></div>
+                    `;
+                    const featureList = featuresDiv.querySelector('.feature-list');
+                    
+                    availableFeatures.forEach(feature => {
+                        const tag = document.createElement('span');
+                        tag.className = 'feature-tag';
+                        tag.textContent = feature;
+                        tag.onclick = () => toggleFeature(feature, tag);
+                        featureList.appendChild(tag);
+                    });
+                    
+                    document.getElementById('evaluateBtn').disabled = false;
+                    document.getElementById('pcaBtn').disabled = false;
+                } else {
+                    throw new Error(data.detail || 'Ошибка агрегации');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Агрегировать';
+            }
+        }
+        
+        function toggleFeature(feature, element) {
+            const index = selectedFeatures.indexOf(feature);
+            if (index > -1) {
+                selectedFeatures.splice(index, 1);
+                element.classList.remove('selected');
+            } else {
+                selectedFeatures.push(feature);
+                element.classList.add('selected');
+            }
+            
+            document.getElementById('evaluateBtn').disabled = selectedFeatures.length === 0;
+            document.getElementById('pcaBtn').disabled = selectedFeatures.length === 0;
+            document.getElementById('spectrumBtn').disabled = selectedFeatures.length === 0;
+        }
+        
+        async function evaluateFeatures() {
+            if (!currentDfFeaturesCacheKey || selectedFeatures.length === 0) {
+                alert('Выберите признаки для оценки');
+                return;
+            }
+            
+            const statusDiv = document.getElementById('evaluateStatus');
+            const btn = document.getElementById('evaluateBtn');
+            const resultsDiv = document.getElementById('metricsResults');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Оценка...';
+            statusDiv.innerHTML = '<div class="status loading">Оценка признаков...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/evaluate-features`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        df_features_cache_key: currentDfFeaturesCacheKey,
+                        feature_columns: selectedFeatures
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `<div class="status success">✅ Оценка завершена</div>`;
+                    
+                    resultsDiv.classList.remove('hidden');
+                    let html = `<h3>Метрики:</h3>`;
+                    html += `<button onclick="downloadCSV('${currentDfFeaturesCacheKey}', 'features.csv')" style="margin-bottom: 10px;">📥 Скачать признаки CSV</button>`;
+                    html += `<div class="metrics-grid">`;
+                    html += `<div class="metric-card"><div class="label">Score</div><div class="value">${data.metrics.score.toFixed(4)}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Separation</div><div class="value">${data.metrics.separation.toFixed(4)}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Explained Variance</div><div class="value">${(data.metrics.explained_variance * 100).toFixed(2)}%</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Mod Samples</div><div class="value">${data.mod_samples_count}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Normal Samples</div><div class="value">${data.normal_samples_count}</div></div>`;
+                    html += `</div>`;
+                    html += `<pre>${JSON.stringify(data.metrics, null, 2)}</pre>`;
+                    
+                    // Сохраняем метрики для сохранения эксперимента
+                    window.currentMetrics = data.metrics;
+                    
+                    resultsDiv.innerHTML = html;
+                } else {
+                    throw new Error(data.detail || 'Ошибка оценки');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Оценить признаки';
+            }
+        }
+        
+        async function calculatePCAScore() {
+            if (!currentDfFeaturesCacheKey || selectedFeatures.length === 0) {
+                alert('Выберите признаки для PCA');
+                return;
+            }
+            
+            const statusDiv = document.getElementById('pcaStatus');
+            const btn = document.getElementById('pcaBtn');
+            const resultsDiv = document.getElementById('pcaResults');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Вычисление...';
+            statusDiv.innerHTML = '<div class="status loading">Вычисление PCA Score...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/pca-score`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        df_features_cache_key: currentDfFeaturesCacheKey,
+                        feature_columns: selectedFeatures,
+                        use_relative_features: true
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `<div class="status success">✅ PCA Score вычислен</div>`;
+                    
+                    resultsDiv.classList.remove('hidden');
+                    let html = `<h3>PCA Score результаты (${data.samples_count} образцов):</h3>`;
+                    html += `<button onclick="downloadCSV('${currentDfFeaturesCacheKey}', 'pca_scores.csv')" style="margin-bottom: 10px;">📥 Скачать CSV</button>`;
+                    html += `<div style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background: #f9f9f9;">`;
+                    html += `<pre style="margin: 0;">${JSON.stringify(data.results.slice(0, 20), null, 2)}${data.results.length > 20 ? '\n... (показаны первые 20)' : ''}</pre>`;
+                    html += `</div>`;
+                    resultsDiv.innerHTML = html;
+                    
+                    // После вычисления PCA автоматически вычисляем спектр, если есть признаки
+                    if (selectedFeatures.length > 0) {
+                        console.log('🔄 Автоматическое вычисление спектра после PCA');
+                        setTimeout(() => {
+                            createSpectrum();
+                        }, 500);
+                    }
+                } else {
+                    throw new Error(data.detail || 'Ошибка вычисления PCA');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Вычислить PCA Score';
+            }
+        }
+        
+        async function loadExperiments() {
+            const statusDiv = document.getElementById('experimentsStatus');
+            const btn = document.getElementById('experimentsBtn');
+            const listDiv = document.getElementById('experimentsList');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Загрузка...';
+            statusDiv.innerHTML = '<div class="status loading">Загрузка экспериментов...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/experiments?top_n=3`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `<div class="status success">✅ Загружено ${data.count} экспериментов</div>`;
+                    
+                    listDiv.classList.remove('hidden');
+                    let html = '<h3>Топ-3 эксперимента:</h3><div style="display: grid; gap: 10px;">';
+                    
+                    data.experiments.forEach((exp, idx) => {
+                        html += `
+                            <div style="border: 2px solid #667eea; padding: 15px; border-radius: 8px; cursor: pointer;" 
+                                 onclick="loadExperimentDetails('${exp.name}')">
+                                <strong>${idx + 1}. ${exp.name}</strong><br>
+                                <small>Score: ${exp.score.toFixed(4)} | Separation: ${exp.separation.toFixed(4)} | Features: ${exp.n_features}</small>
+                            </div>
+                        `;
+                    });
+                    
+                    html += '</div>';
+                    listDiv.innerHTML = html;
+                } else {
+                    throw new Error(data.detail || 'Ошибка загрузки экспериментов');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Загрузить топ-3 экспериментов';
+            }
+        }
+        
+        async function loadExperimentDetails(experimentName) {
+            const detailsDiv = document.getElementById('experimentDetails');
+            detailsDiv.classList.remove('hidden');
+            detailsDiv.innerHTML = '<div class="status loading">Загрузка деталей эксперимента...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/load-experiment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        experiment_name: experimentName,
+                        experiments_dir: 'experiments'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    let html = `<h3>Детали эксперимента: ${data.experiment_name}</h3>`;
+                    html += `<div class="metrics-grid">`;
+                    html += `<div class="metric-card"><div class="label">Score</div><div class="value">${data.metrics.score?.toFixed(4) || 'N/A'}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Separation</div><div class="value">${data.metrics.separation?.toFixed(4) || 'N/A'}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Features</div><div class="value">${data.n_features}</div></div>`;
+                    html += `<div class="metric-card"><div class="label">Method</div><div class="value">${data.method}</div></div>`;
+                    html += `</div>`;
+                    
+                    if (data.pca_data && data.pca_data.length > 0) {
+                        html += `<h4>PCA данные (${data.pca_samples_count || data.pca_data.length} образцов):</h4>`;
+                        if (data.pca_cache_key) {
+                            html += `<button onclick="loadPCADataFromCache('${data.pca_cache_key}')" style="margin-bottom: 10px;">📊 Загрузить полные PCA данные</button>`;
+                        }
+                        html += `<pre>${JSON.stringify(data.pca_data.slice(0, 10), null, 2)}${(data.pca_samples_count || data.pca_data.length) > 10 ? '\n... (показаны первые 10)' : ''}</pre>`;
+                    } else if (data.has_pca && data.pca_cache_key) {
+                        html += `<h4>PCA данные:</h4>`;
+                        html += `<button onclick="loadPCADataFromCache('${data.pca_cache_key}')" style="margin-bottom: 10px;">📊 Загрузить PCA данные (${data.pca_samples_count || 0} образцов)</button>`;
+                    }
+                    
+                    if (data.features && data.features.length > 0) {
+                        html += `<h4>Признаки (${data.features.length}):</h4><div class="feature-list">`;
+                        data.features.forEach(f => {
+                            html += `<span class="feature-tag">${f}</span>`;
+                        });
+                        html += `</div>`;
+                    }
+                    
+                    detailsDiv.innerHTML = html;
+                } else {
+                    throw new Error(data.detail || 'Ошибка загрузки эксперимента');
+                }
+            } catch (error) {
+                detailsDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
+        }
+        
+        async function createSpectrum() {
+            if (!currentDfFeaturesCacheKey || selectedFeatures.length === 0) {
+                alert('Выберите признаки для создания спектра');
+                return;
+            }
+            
+            // Если PCA еще не вычислен, вычисляем его сначала
+            const pcaResultsDiv = document.getElementById('pcaResults');
+            if (!pcaResultsDiv || pcaResultsDiv.classList.contains('hidden') || pcaResultsDiv.innerHTML.trim() === '') {
+                console.log('🔄 PCA не вычислен, вычисляем автоматически перед созданием спектра');
+                await calculatePCAScore();
+                // Ждем завершения PCA перед созданием спектра
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            const statusDiv = document.getElementById('spectrumStatus');
+            const btn = document.getElementById('spectrumBtn');
+            const resultsDiv = document.getElementById('spectrumResults');
+            const percentileLow = parseFloat(document.getElementById('percentileLow').value);
+            const percentileHigh = parseFloat(document.getElementById('percentileHigh').value);
+            const useGMM = document.getElementById('useGMM').checked;
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Создание спектра...';
+            statusDiv.innerHTML = '<div class="status loading">Создание спектра...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/create-spectrum`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        df_features_cache_key: currentDfFeaturesCacheKey,
+                        feature_columns: selectedFeatures,
+                        percentile_low: percentileLow,
+                        percentile_high: percentileHigh,
+                        use_relative_features: true,
+                        use_gmm_classification: useGMM
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `<div class="status success">✅ Спектр создан</div>`;
+                    
+                    resultsDiv.classList.remove('hidden');
+                    let html = `<h3>Результаты спектрального анализа:</h3>`;
+                    
+                    if (data.spectrum_data && data.spectrum_data.length > 0) {
+                        html += `<button onclick="downloadCSV('${data.spectrum_cache_key}', 'spectrum_data.csv')" style="margin-bottom: 10px;">📥 Скачать спектр CSV</button>`;
+                    }
+                    
+                    if (data.modes && data.modes.length > 0) {
+                        html += `<h4>Моды (${data.modes.length}):</h4><pre>${JSON.stringify(data.modes, null, 2)}</pre>`;
+                    }
+                    
+                    if (data.percentiles) {
+                        html += `<h4>Процентили:</h4><pre>${JSON.stringify(data.percentiles, null, 2)}</pre>`;
+                    }
+                    
+                    if (data.spectrum_data && data.spectrum_data.length > 0) {
+                        html += `<h4>Спектральные данные (первые 10):</h4><pre>${JSON.stringify(data.spectrum_data.slice(0, 10), null, 2)}</pre>`;
+                    }
+                    
+                    if (data.gmm) {
+                        html += `<h4>GMM параметры:</h4><pre>${JSON.stringify(data.gmm, null, 2)}</pre>`;
+                    }
+                    
+                    // Сохраняем ключи для сохранения эксперимента
+                    if (data.spectrum_cache_key) {
+                        window.currentSpectrumCacheKey = data.spectrum_cache_key;
+                    }
+                    if (data.analyzer_cache_key) {
+                        window.currentAnalyzerCacheKey = data.analyzer_cache_key;
+                    }
+                    
+                    resultsDiv.innerHTML = html;
+                    
+                    // Активируем кнопку сохранения эксперимента
+                    document.getElementById('saveExperimentBtn').disabled = false;
+                } else {
+                    throw new Error(data.detail || 'Ошибка создания спектра');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Создать спектр';
+            }
+        }
+        
+        function downloadCSV(cacheKey, filename) {
+            const url = `${API_BASE}/api/v1/download-csv?cache_key=${encodeURIComponent(cacheKey)}&filename=${encodeURIComponent(filename)}`;
+            window.open(url, '_blank');
+        }
+        
+        async function loadPCADataFromCache(pcaCacheKey) {
+            try {
+                // Загружаем PCA данные из кэша через download-csv endpoint
+                const response = await fetch(`${API_BASE}/api/v1/download-csv?cache_key=${encodeURIComponent(pcaCacheKey)}&filename=pca_results.csv`);
+                if (response.ok) {
+                    // Показываем PCA результаты
+                    const pcaResultsDiv = document.getElementById('pcaResults');
+                    if (pcaResultsDiv) {
+                        pcaResultsDiv.classList.remove('hidden');
+                        
+                        // Парсим CSV данные
+                        const csvText = await response.text();
+                        const lines = csvText.split('\n').filter(line => line.trim());
+                        if (lines.length > 1) {
+                            // Правильный парсинг CSV с учетом кавычек
+                            const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+                            const data = lines.slice(1, 21).map(line => {
+                                // Простой парсинг CSV (может не работать для сложных случаев с запятыми в значениях)
+                                const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+                                const obj = {};
+                                headers.forEach((header, idx) => {
+                                    obj[header] = values[idx] || '';
+                                });
+                                return obj;
+                            });
+                            
+                            let html = `<h3>📊 PCA данные из эксперимента (${lines.length - 1} образцов):</h3>`;
+                            html += `<button onclick="downloadCSV('${pcaCacheKey}', 'pca_results.csv')" style="margin-bottom: 10px;">📥 Скачать CSV</button>`;
+                            html += `<div style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background: #f9f9f9;">`;
+                            html += `<pre style="margin: 0;">${JSON.stringify(data, null, 2)}${lines.length > 21 ? '\n... (показаны первые 20)' : ''}</pre>`;
+                            html += `</div>`;
+                            pcaResultsDiv.innerHTML = html;
+                            
+                            // Сохраняем ключ для дальнейшего использования
+                            window.currentPCACacheKey = pcaCacheKey;
+                            
+                            // Активируем кнопку PCA Score, если она есть
+                            const pcaBtn = document.getElementById('pcaBtn');
+                            if (pcaBtn) {
+                                pcaBtn.disabled = false;
+                            }
+                        } else {
+                            pcaResultsDiv.innerHTML = `<h3>PCA данные из эксперимента:</h3><p>✅ PCA данные загружены. Используйте кнопку "Вычислить PCA Score" для отображения.</p>`;
+                        }
+                    }
+                } else {
+                    const errorText = await response.text();
+                    console.error('❌ Не удалось загрузить PCA данные из кэша:', pcaCacheKey, errorText);
+                    const pcaResultsDiv = document.getElementById('pcaResults');
+                    if (pcaResultsDiv) {
+                        pcaResultsDiv.classList.remove('hidden');
+                        pcaResultsDiv.innerHTML = `<div class="status error">❌ Не удалось загрузить PCA данные из кэша: ${pcaCacheKey}<br>Ошибка: ${errorText}</div>`;
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Ошибка загрузки PCA данных:', error);
+                const pcaResultsDiv = document.getElementById('pcaResults');
+                if (pcaResultsDiv) {
+                    pcaResultsDiv.classList.remove('hidden');
+                    pcaResultsDiv.innerHTML = `<div class="status error">❌ Ошибка загрузки PCA данных: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        async function saveExperiment() {
+            if (!currentDfFeaturesCacheKey || selectedFeatures.length === 0) {
+                alert('Необходимо загрузить данные, агрегировать их и выбрать признаки');
+                return;
+            }
+            
+            const experimentName = document.getElementById('experimentName').value || `experiment_${new Date().toISOString().slice(0, 10)}`;
+            const statusDiv = document.getElementById('saveExperimentStatus');
+            const btn = document.getElementById('saveExperimentBtn');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>Сохранение...';
+            statusDiv.innerHTML = '<div class="status loading">Сохранение эксперимента...</div>';
+            
+            try {
+                const requestBody = {
+                    experiment_name: experimentName,
+                    df_features_cache_key: currentDfFeaturesCacheKey,
+                    feature_columns: selectedFeatures,
+                    metrics: window.currentMetrics || null,
+                    use_relative_features: true,
+                    method: 'api_manual',
+                    experiments_dir: 'experiments'
+                };
+                
+                const response = await fetch(`${API_BASE}/api/v1/save-experiment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = `<div class="status success">✅ Эксперимент сохранен: ${data.experiment_path}</div>`;
+                    
+                    let filesHtml = '<h4>Сохраненные файлы:</h4><ul>';
+                    for (const [key, value] of Object.entries(data.files_saved)) {
+                        if (value) {
+                            filesHtml += `<li>${key}: ${value}</li>`;
+                        }
+                    }
+                    filesHtml += '</ul>';
+                    statusDiv.innerHTML += filesHtml;
+                } else {
+                    throw new Error(data.detail || 'Ошибка сохранения эксперимента');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Сохранить эксперимент';
+            }
+        }
+    </script>
+</body>
+</html>
+

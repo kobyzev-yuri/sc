@@ -412,8 +412,37 @@ def render_gdrive_upload_section(
     
     # Проверяем авторизацию
     import os
-    default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
-    creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    import json
+    import tempfile
+    
+    # КРИТИЧНО: Проверяем переменную окружения для credentials (для Cloud Run)
+    credentials_json = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON')
+    if credentials_json:
+        try:
+            # Если credentials переданы как JSON строка в переменной окружения
+            creds_data = json.loads(credentials_json)
+            # Создаем временный файл для credentials
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(creds_data, f)
+                temp_creds_path = f.name
+            creds_path = temp_creds_path
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге GOOGLE_DRIVE_CREDENTIALS_JSON: {e}")
+            # Fallback на обычный путь
+            local_creds_path = os.path.join('.config', 'gdrive', 'credentials.json')
+            if os.path.exists(local_creds_path):
+                default_creds_path = local_creds_path
+            else:
+                default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+            creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    else:
+        local_creds_path = os.path.join('.config', 'gdrive', 'credentials.json')
+        if os.path.exists(local_creds_path):
+            default_creds_path = local_creds_path
+        else:
+            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+        creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    
     credentials = get_credentials(credentials_path=creds_path)
     
     if not credentials:
@@ -468,13 +497,63 @@ def authorize_gdrive(creds_path: str) -> bool:
     from pathlib import Path
     from urllib.parse import urlencode
     
+    # КРИТИЧНО: Проверяем переменные окружения для credentials (для Cloud Run)
+    import os
+    import json
+    import base64
+    
+    # Сначала проверяем base64-encoded версию (более безопасно для передачи через командную строку)
+    credentials_b64 = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON_B64')
+    if credentials_b64:
+        try:
+            # Декодируем base64
+            credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
+            creds_data = json.loads(credentials_json)
+            # Создаем временный файл для credentials
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(creds_data, f)
+                temp_creds_path = f.name
+            creds_path = temp_creds_path
+        except Exception as e:
+            st.error(f"❌ Ошибка при декодировании GOOGLE_DRIVE_CREDENTIALS_JSON_B64: {e}")
+            return False
+    
+    # Fallback: проверяем обычную JSON строку
+    if not creds_path or not Path(creds_path).exists():
+        credentials_json = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON')
+        if credentials_json:
+            try:
+                # Если credentials переданы как JSON строка в переменной окружения
+                creds_data = json.loads(credentials_json)
+                # Создаем временный файл для credentials
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    json.dump(creds_data, f)
+                    temp_creds_path = f.name
+                creds_path = temp_creds_path
+            except Exception as e:
+                st.error(f"❌ Ошибка при парсинге GOOGLE_DRIVE_CREDENTIALS_JSON: {e}")
+                return False
+    
+    # Инициализируем creds_path, если он не был установлен из переменных окружения
+    if not creds_path:
+        # Сначала проверяем в текущей директории (для Docker образа)
+        local_creds_path = os.path.join('.config', 'gdrive', 'credentials.json')
+        if os.path.exists(local_creds_path):
+            default_creds_path = local_creds_path
+        else:
+            # Fallback на домашнюю директорию
+            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+        creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    
     # Проверяем наличие credentials.json
     if not Path(creds_path).exists():
         st.error(f"❌ **Файл credentials.json не найден!**")
         st.caption(f"""
         Ожидаемый путь: `{creds_path}`
         
-        **Что делать:**
+        **Для локальной разработки:**
         1. Создайте OAuth credentials в [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
         2. Скачайте credentials.json
         3. Положите файл в: `~/.config/gdrive/credentials.json`
@@ -482,12 +561,29 @@ def authorize_gdrive(creds_path: str) -> bool:
            mkdir -p ~/.config/gdrive
            cp ~/Downloads/credentials.json ~/.config/gdrive/credentials.json
            ```
-        4. Или установите переменную окружения:
+        
+        **Для Cloud Run (рекомендуется):**
+        1. Создайте Secret в Google Cloud Secrets Manager:
+           ```bash
+           gcloud secrets create google-drive-credentials --data-file=credentials.json
+           ```
+        2. Установите переменную окружения в Cloud Run:
+           ```bash
+           gcloud run services update dashboard \\
+             --set-env-vars="GOOGLE_DRIVE_CREDENTIALS_JSON=$(cat credentials.json | base64 -w 0)" \\
+             --region us-central1
+           ```
+        3. Или используйте Secret Manager:
+           ```bash
+           gcloud run services update dashboard \\
+             --set-secrets="GOOGLE_DRIVE_CREDENTIALS_JSON=google-drive-credentials:latest" \\
+             --region us-central1
+           ```
+        
+        **Альтернатива:** Установите переменную окружения:
            ```bash
            export GOOGLE_DRIVE_CREDENTIALS_PATH="/path/to/credentials.json"
            ```
-        
-        Подробнее: см. `docs/GOOGLE_OAUTH_SETUP_RU.md`
         """)
         return False
     
@@ -496,15 +592,50 @@ def authorize_gdrive(creds_path: str) -> bool:
         # Пытаемся определить, работаем ли мы на Cloud Run или локально
         # Cloud Run устанавливает переменную K_SERVICE
         if os.getenv('K_SERVICE'):
-            # На Cloud Run - используем URL сервиса СО слешем (как в credentials.json)
-            redirect_uri = "https://dashboard-gia5jttcaq-uc.a.run.app/"
+            # На Cloud Run - получаем URL из переменной окружения или используем текущий запрос
+            # Cloud Run устанавливает переменную K_SERVICE_URL или можно использовать запрос
+            service_url = os.getenv('K_SERVICE_URL') or os.getenv('CLOUD_RUN_URL')
+            if service_url:
+                redirect_uri = f"{service_url}/"
+            else:
+                # Пытаемся получить из текущего запроса (если доступен st)
+                if st and hasattr(st, 'server') and hasattr(st.server, 'request'):
+                    try:
+                        request = st.server.request
+                        if request:
+                            host = request.headers.get('Host', '')
+                            scheme = 'https' if request.headers.get('X-Forwarded-Proto') == 'https' else 'http'
+                            redirect_uri = f"{scheme}://{host}/"
+                        else:
+                            # Fallback: используем стандартный формат Cloud Run
+                            # КРИТИЧНО: Добавляем оба возможных URL для Cloud Run
+                            redirect_uri = "https://dashboard-280762415812.us-central1.run.app/"
+                    except:
+                        redirect_uri = "https://dashboard-280762415812.us-central1.run.app/"
+                else:
+                    # Fallback: используем стандартный формат Cloud Run
+                    redirect_uri = "https://dashboard-280762415812.us-central1.run.app/"
         else:
             # Локальная разработка
             port = os.getenv('STREAMLIT_SERVER_PORT', '8501')
             redirect_uri = f"http://localhost:{port}"
-    except:
+    except Exception as e:
         # Fallback для Cloud Run
-        redirect_uri = "https://dashboard-gia5jttcaq-uc.a.run.app/"
+        logger.error(f"Ошибка при определении redirect URI: {e}")
+        redirect_uri = "https://dashboard-280762415812.us-central1.run.app/"
+    
+    # КРИТИЧНО: Показываем оба возможных redirect URI для Cloud Run
+    # Пользователь должен добавить оба в Google Cloud Console
+    if os.getenv('K_SERVICE'):
+        st.info(f"""
+        **Redirect URI для Google Cloud Console:**
+        - `https://dashboard-280762415812.us-central1.run.app/`
+        - `https://dashboard-gia5jttcaq-uc.a.run.app/`
+        
+        **Текущий redirect URI:** `{redirect_uri}`
+        
+        ⚠️ Убедитесь, что **ОБА** URI добавлены в Google Cloud Console в настройках OAuth credentials!
+        """)
     
     # Создаем OAuth flow
     flow = create_oauth_flow(creds_path, redirect_uri=redirect_uri)
@@ -656,20 +787,65 @@ def render_gdrive_load_section(data_source_selected: str = None) -> tuple:
         return None, {}
 
 
-def _render_gdrive_load() -> tuple:
-    """Рендерит секцию загрузки из Google Drive - только кнопка загрузки (поля ввода в sidebar)."""
+def _gdrive_load_fragment() -> tuple:
+    """
+    Фрагмент для загрузки данных из Google Drive.
+    Использует st.fragment для изоляции процесса загрузки и предотвращения полного rerun.
+    """
     if not GDRIVE_ENABLED or not st:
         return None, {}
     
-    st.markdown("---")
-    st.subheader("📥 Google Drive")
+    import os
+    import json
+    import base64
+    import tempfile
+    import re
     
     # КРИТИЧНО: URL берем из session state (устанавливается в sidebar)
     drive_folder_url = safe_session_get("gdrive_load_url", "")
     
-    import os
-    default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
-    creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    # КРИТИЧНО: Проверяем переменные окружения для credentials (для Cloud Run)
+    creds_path = None
+    
+    # Сначала проверяем base64-encoded версию (более безопасно для передачи через командную строку)
+    credentials_b64 = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON_B64')
+    if credentials_b64:
+        try:
+            # Декодируем base64
+            credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
+            creds_data = json.loads(credentials_json)
+            # Создаем временный файл для credentials
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(creds_data, f)
+                creds_path = f.name
+        except Exception as e:
+            logger.error(f"Ошибка при декодировании GOOGLE_DRIVE_CREDENTIALS_JSON_B64: {e}")
+    
+    # Fallback: проверяем обычную JSON строку
+    if not creds_path:
+        credentials_json = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON')
+        if credentials_json:
+            try:
+                # Если credentials переданы как JSON строка в переменной окружения
+                creds_data = json.loads(credentials_json)
+                # Создаем временный файл для credentials
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    json.dump(creds_data, f)
+                    creds_path = f.name
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге GOOGLE_DRIVE_CREDENTIALS_JSON: {e}")
+    
+    # Fallback на обычный путь к файлу
+    if not creds_path:
+        # Сначала проверяем в текущей директории (для Docker образа)
+        local_creds_path = os.path.join('.config', 'gdrive', 'credentials.json')
+        if os.path.exists(local_creds_path):
+            default_creds_path = local_creds_path
+        else:
+            # Fallback на домашнюю директорию
+            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+        creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+    
     credentials = get_credentials(credentials_path=creds_path)
     
     # Показываем информацию о текущих настройках
@@ -694,13 +870,15 @@ def _render_gdrive_load() -> tuple:
         # Устанавливаем флаг, что загрузка была запрошена
         safe_session_set("gdrive_load_triggered", True)
         safe_session_set("gdrive_load_url", drive_folder_url)
-        logger.debug(f"[GDRIVE] Кнопка нажата, начинаю загрузку из: {drive_folder_url}")
+        logger.info(f"[GDRIVE] Кнопка нажата, начинаю загрузку из: {drive_folder_url}")
         
         # Создаем прогрессбар
         progress_bar = st.progress(0)
         progress_text = st.empty()
         
         def log_to_ui(message):
+            # Логируем все сообщения для диагностики
+            logger.info(f"[GDRIVE] Progress: {message}")
             # Парсим прогресс из сообщений типа "[1/36]" или "📥 Начинаю загрузку 36 JSON файлов..."
             progress_match = re.search(r'\[(\d+)/(\d+)\]', message)
             if progress_match:
@@ -714,58 +892,79 @@ def _render_gdrive_load() -> tuple:
                 if total_match:
                     total = int(total_match.group(1))
                     progress_text.text(f"📥 Найдено файлов: {total}")
+            else:
+                # Обновляем текст для других сообщений
+                progress_text.text(message)
         
-        predictions = load_predictions_from_gdrive(
-            drive_folder_url,
-            credentials_path=creds_path,
-            log_callback=log_to_ui
-        )
-        
-        # Завершаем прогрессбар
-        progress_bar.progress(1.0)
-        if predictions:
-            progress_text.text(f"✅ Загружено {len(predictions)} файлов")
-        else:
-            progress_text.text("⚠️ Файлы не найдены")
-        
-        if predictions:
-            st.success(f"✅ Загружено {len(predictions)} файлов из Google Drive")
-            # Сохраняем predictions в session state для использования в dashboard
-            # Конвертируем в формат domain.predictions_from_dict
-            try:
-                from scale import domain
-                predictions_converted = {}
-                for name, data in predictions.items():
-                    predictions_converted[name] = domain.predictions_from_dict(data)
-                
-                # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
-                # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
-                safe_session_set("predictions_cloud", predictions_converted)
-                safe_session_set("use_cloud_storage", True)
-                safe_session_set("data_source", "Google Drive")
-                
-                # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
-                last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
-                current_hash = hash(str(sorted(predictions_converted.keys())))
-                
-                if last_loaded_hash != current_hash:
-                    safe_session_set("gdrive_last_loaded_hash", current_hash)
-                    # Сбрасываем флаг загрузки
-                    safe_session_set("gdrive_load_triggered", False)
-                    st.success("✅ Данные загружены и готовы к использованию!")
-                    logger.debug(f"[GDRIVE] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
-                else:
-                    st.info("ℹ️ Данные уже загружены ранее")
-                    # Сбрасываем флаг, так как данные уже были загружены
-                    safe_session_set("gdrive_load_triggered", False)
-                
-                # Возвращаем данные - они будут использованы в dashboard
-                return drive_folder_url, predictions_converted
-            except Exception as e:
-                st.error(f"Ошибка при обработке данных из Google Drive: {e}")
+        try:
+            import time
+            start_time = time.time()
+            logger.info(f"[GDRIVE] Начало загрузки файлов...")
+            
+            predictions = load_predictions_from_gdrive(
+                drive_folder_url,
+                credentials_path=creds_path,
+                log_callback=log_to_ui
+            )
+            
+            elapsed = time.time() - start_time
+            logger.info(f"[GDRIVE] Загрузка завершена за {elapsed:.2f}с. Загружено файлов: {len(predictions) if predictions else 0}")
+            
+            # Завершаем прогрессбар
+            progress_bar.progress(1.0)
+            if predictions:
+                progress_text.text(f"✅ Загружено {len(predictions)} файлов")
+            else:
+                progress_text.text("⚠️ Файлы не найдены")
+            
+            if predictions:
+                st.success(f"✅ Загружено {len(predictions)} файлов из Google Drive")
+                # Сохраняем predictions в session state для использования в dashboard
+                # Конвертируем в формат domain.predictions_from_dict
+                try:
+                    from scale import domain
+                    predictions_converted = {}
+                    for name, data in predictions.items():
+                        predictions_converted[name] = domain.predictions_from_dict(data)
+                    
+                    # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
+                    # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
+                    safe_session_set("predictions_cloud", predictions_converted)
+                    safe_session_set("use_cloud_storage", True)
+                    # КРИТИЧНО: Сохраняем data_source ПЕРЕД rerun, чтобы предотвратить сброс
+                    safe_session_set("data_source", "Google Drive")
+                    
+                    # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
+                    last_loaded_hash = safe_session_get("gdrive_last_loaded_hash", None)
+                    current_hash = hash(str(sorted(predictions_converted.keys())))
+                    
+                    if last_loaded_hash != current_hash:
+                        safe_session_set("gdrive_last_loaded_hash", current_hash)
+                        # Сбрасываем флаг загрузки
+                        safe_session_set("gdrive_load_triggered", False)
+                        st.success("✅ Данные загружены и готовы к использованию!")
+                        logger.info(f"[GDRIVE] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
+                        # КРИТИЧНО: Вызываем полный rerun только после успешной загрузки
+                        # Это обновит весь dashboard с новыми данными
+                        st.rerun()
+                    else:
+                        st.info("ℹ️ Данные уже загружены ранее")
+                        # Сбрасываем флаг, так как данные уже были загружены
+                        safe_session_set("gdrive_load_triggered", False)
+                    
+                    # Возвращаем данные - они будут использованы в dashboard
+                    return drive_folder_url, predictions_converted
+                except Exception as e:
+                    logger.error(f"[GDRIVE] Ошибка при обработке данных: {e}", exc_info=True)
+                    st.error(f"Ошибка при обработке данных из Google Drive: {e}")
+                    return drive_folder_url, {}
+            else:
+                st.warning("⚠️ Не найдено JSON файлов в указанной папке")
                 return drive_folder_url, {}
-        else:
-            st.warning("⚠️ Не найдено JSON файлов в указанной папке")
+        except Exception as e:
+            elapsed = time.time() - start_time if 'start_time' in locals() else 0
+            logger.error(f"[GDRIVE] Ошибка при загрузке после {elapsed:.2f}с: {e}", exc_info=True)
+            st.error(f"❌ Ошибка при загрузке из Google Drive: {e}")
             return drive_folder_url, {}
     
     # КРИТИЧНО: Если данные уже загружены, возвращаем их, но интерфейс все равно показывается выше
@@ -781,6 +980,19 @@ def _render_gdrive_load() -> tuple:
             return drive_folder_url, existing_predictions
     
     return None, {}
+
+
+def _render_gdrive_load() -> tuple:
+    """Рендерит секцию загрузки из Google Drive - использует фрагмент для изоляции."""
+    if not GDRIVE_ENABLED or not st:
+        return None, {}
+    
+    st.markdown("---")
+    st.subheader("📥 Google Drive")
+    
+    # Используем фрагмент для изоляции процесса загрузки
+    # Это предотвращает полный rerun всего приложения во время загрузки
+    return _gdrive_load_fragment()
 
 
 def _render_gcs_load() -> tuple:
@@ -848,21 +1060,30 @@ def _render_gcs_load() -> tuple:
         current_data_source = safe_session_get("data_source", None)
         if current_data_source == "Google Cloud Storage (GCS)":
             # Показываем информацию о загруженных данных
+            bucket_name_for_return = safe_session_get("gcs_load_bucket", "existing")
             st.info(f"✅ Данные уже загружены: {len(existing_predictions)} файлов. Вы можете загрузить другие данные, нажав кнопку выше.")
-            return f"gcs://{bucket_name}", existing_predictions
+            logger.debug(f"[GCS] Возвращаю уже загруженные данные: {len(existing_predictions)} файлов")
+            return f"gcs://{bucket_name_for_return}", existing_predictions
     
     return None, {}
 
 
-def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
-    """Загружает данные из Google Cloud Storage."""
+def _gcs_load_fragment(bucket_name: str, prefix: str = "") -> tuple:
+    """
+    Фрагмент для загрузки данных из Google Cloud Storage.
+    Использует st.fragment для изоляции процесса загрузки и предотвращения полного rerun.
+    """
     from scale.gcs_integration import load_json_from_gcs_bucket
+    import re
+    import time
     
     # Создаем прогрессбар
     progress_bar = st.progress(0)
     progress_text = st.empty()
     
     def log_to_ui(message):
+        # Логируем все сообщения для диагностики
+        logger.info(f"[GCS] Progress: {message}")
         # Парсим прогресс из сообщений типа "[1/36]" или "📥 Начинаю загрузку 36 JSON файлов..."
         progress_match = re.search(r'\[(\d+)/(\d+)\]', message)
         if progress_match:
@@ -876,58 +1097,84 @@ def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
             if total_match:
                 total = int(total_match.group(1))
                 progress_text.text(f"📥 Найдено файлов: {total}")
+        else:
+            # Обновляем текст для других сообщений
+            progress_text.text(message)
     
-    predictions = load_json_from_gcs_bucket(
-        bucket_name,
-        prefix=prefix,
-        log_callback=log_to_ui
-    )
-    
-    # Завершаем прогрессбар
-    progress_bar.progress(1.0)
-    if predictions:
-        progress_text.text(f"✅ Загружено {len(predictions)} файлов")
-    else:
-        progress_text.text("⚠️ Файлы не найдены")
-    
-    if predictions:
-        st.success(f"✅ Загружено {len(predictions)} файлов из GCS bucket")
+    try:
+        start_time = time.time()
+        logger.info(f"[GCS] Начало загрузки файлов из bucket: {bucket_name}")
         
-        # Сохраняем predictions в session state для использования в dashboard
-        # Конвертируем в формат domain.predictions_from_dict
-        try:
-            from scale import domain
-            predictions_converted = {}
-            for name, data in predictions.items():
-                predictions_converted[name] = domain.predictions_from_dict(data)
+        predictions = load_json_from_gcs_bucket(
+            bucket_name,
+            prefix=prefix,
+            log_callback=log_to_ui
+        )
+        
+        elapsed = time.time() - start_time
+        logger.info(f"[GCS] Загрузка завершена за {elapsed:.2f}с. Загружено файлов: {len(predictions) if predictions else 0}")
+        
+        # Завершаем прогрессбар
+        progress_bar.progress(1.0)
+        if predictions:
+            progress_text.text(f"✅ Загружено {len(predictions)} файлов")
+        else:
+            progress_text.text("⚠️ Файлы не найдены")
+        
+        if predictions:
+            st.success(f"✅ Загружено {len(predictions)} файлов из GCS bucket")
             
-            # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
-            # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
-            safe_session_set("predictions_cloud", predictions_converted)
-            safe_session_set("use_cloud_storage", True)
-            safe_session_set("data_source", "Google Cloud Storage (GCS)")
-            
-            # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
-            last_loaded_hash = safe_session_get("gcs_last_loaded_hash", None)
-            current_hash = hash(str(sorted(predictions_converted.keys())))
-            
-            if last_loaded_hash != current_hash:
-                safe_session_set("gcs_last_loaded_hash", current_hash)
-                # Сбрасываем флаг загрузки
-                safe_session_set("gcs_load_triggered", False)
-                st.success("✅ Данные загружены и готовы к использованию!")
-                logger.debug(f"[GCS] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
-            else:
-                st.info("ℹ️ Данные уже загружены ранее")
-                # Сбрасываем флаг, так как данные уже были загружены
-                safe_session_set("gcs_load_triggered", False)
-            
-            # Возвращаем данные - они будут использованы в dashboard
-            return f"gcs://{bucket_name}", predictions_converted
-        except Exception as e:
-            st.error(f"Ошибка при обработке данных из GCS: {e}")
+            # Сохраняем predictions в session state для использования в dashboard
+            # Конвертируем в формат domain.predictions_from_dict
+            try:
+                from scale import domain
+                predictions_converted = {}
+                for name, data in predictions.items():
+                    predictions_converted[name] = domain.predictions_from_dict(data)
+                
+                # КРИТИЧНО: Сохраняем данные ПЕРЕД любыми st.write() или st.rerun()
+                # Это гарантирует, что данные будут в session state даже если rerun произойдет сразу
+                safe_session_set("predictions_cloud", predictions_converted)
+                safe_session_set("use_cloud_storage", True)
+                safe_session_set("data_source", "Google Cloud Storage (GCS)")
+                
+                # КРИТИЧНО: Проверяем, не был ли уже вызван rerun для этих данных
+                last_loaded_hash = safe_session_get("gcs_last_loaded_hash", None)
+                current_hash = hash(str(sorted(predictions_converted.keys())))
+                
+                if last_loaded_hash != current_hash:
+                    safe_session_set("gcs_last_loaded_hash", current_hash)
+                    # Сбрасываем флаг загрузки
+                    safe_session_set("gcs_load_triggered", False)
+                    st.success("✅ Данные загружены и готовы к использованию!")
+                    logger.info(f"[GCS] Данные успешно загружены и сохранены: {len(predictions_converted)} файлов")
+                    # КРИТИЧНО: Вызываем полный rerun только после успешной загрузки
+                    # Это обновит весь dashboard с новыми данными
+                    st.rerun()
+                else:
+                    st.info("ℹ️ Данные уже загружены ранее")
+                    # Сбрасываем флаг, так как данные уже были загружены
+                    safe_session_set("gcs_load_triggered", False)
+                
+                # Возвращаем данные - они будут использованы в dashboard
+                return f"gcs://{bucket_name}", predictions_converted
+            except Exception as e:
+                logger.error(f"[GCS] Ошибка при обработке данных: {e}", exc_info=True)
+                st.error(f"Ошибка при обработке данных из GCS: {e}")
+                return f"gcs://{bucket_name}", {}
+        else:
+            st.warning("⚠️ Не найдено JSON файлов в указанном bucket")
             return f"gcs://{bucket_name}", {}
-    else:
-        st.warning("⚠️ Не найдено JSON файлов в указанном bucket")
+    except Exception as e:
+        elapsed = time.time() - start_time if 'start_time' in locals() else 0
+        logger.error(f"[GCS] Ошибка при загрузке после {elapsed:.2f}с: {e}", exc_info=True)
+        st.error(f"❌ Ошибка при загрузке из GCS: {e}")
         return f"gcs://{bucket_name}", {}
+
+
+def _load_from_gcs(bucket_name: str, prefix: str = "") -> tuple:
+    """Загружает данные из Google Cloud Storage - использует фрагмент для изоляции."""
+    # Используем фрагмент для изоляции процесса загрузки
+    # Это предотвращает полный rerun всего приложения во время загрузки
+    return _gcs_load_fragment(bucket_name, prefix)
 

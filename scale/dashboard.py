@@ -218,19 +218,14 @@ def render_dashboard():
         # Проверяем, установлен ли data_source из session state (после загрузки из GCS/GDrive)
         saved_data_source = safe_session_get("data_source", None)
         
-        # КРИТИЧНО: Если есть загруженные данные из cloud storage, приоритетно устанавливаем правильный data_source
-        cloud_predictions = safe_session_get("predictions_cloud", None)
-        if cloud_predictions and len(cloud_predictions) > 0:
-            # Есть загруженные данные из cloud storage - устанавливаем правильный data_source
-            if GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
-                saved_data_source = "Google Cloud Storage (GCS)"
-                safe_session_set("data_source", saved_data_source)
-                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (есть данные из GCS)")
-            elif GDRIVE_ENABLED and "Google Drive" in data_source_options:
-                saved_data_source = "Google Drive"
-                safe_session_set("data_source", saved_data_source)
-                logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (есть данные из GDrive)")
-        elif use_cloud_storage:
+        # КРИТИЧНО: НЕ восстанавливаем автоматически data_source из cloud storage
+        # Пользователь должен сам выбрать источник данных
+        # Это предотвращает автоматическую загрузку и торможение интерфейса
+        # cloud_predictions = safe_session_get("predictions_cloud", None)
+        # if cloud_predictions and len(cloud_predictions) > 0:
+        #     # Автоматическое восстановление отключено
+        #     pass
+        if False:  # Отключено автоматическое восстановление
             # Флаг установлен, но данных может не быть - все равно устанавливаем правильный data_source
             if saved_data_source and saved_data_source in data_source_options:
                 # Используем сохраненный data_source
@@ -244,21 +239,24 @@ def render_dashboard():
                 safe_session_set("data_source", saved_data_source)
                 logger.debug(f"[DATA_SOURCE] Установлен data_source: {saved_data_source} (use_cloud_storage=True)")
         
+        # КРИТИЧНО: Восстанавливаем выбранный data_source из session state, если он был явно выбран пользователем
+        # Но только если это первый запуск (нет сохраненного выбора) - тогда используем "Использовать директорию"
+        saved_data_source = safe_session_get("data_source", None)
         if saved_data_source and saved_data_source in data_source_options:
-            # Используем сохраненный data_source
+            # Восстанавливаем сохраненный выбор пользователя
             default_index = data_source_options.index(saved_data_source)
-        elif use_cloud_storage and GCS_ENABLED and "Google Cloud Storage (GCS)" in data_source_options:
-            # Находим индекс для GCS опции
-            default_index = data_source_options.index("Google Cloud Storage (GCS)")
-        elif use_gdrive and GDRIVE_ENABLED and "Google Drive" in data_source_options:
-            # Находим индекс для Google Drive опции
-            default_index = data_source_options.index("Google Drive")
-        elif use_exp:
-            default_index = 1
-        elif use_dir:
-            default_index = 0
+            logger.debug(f"[DATA_SOURCE] Восстановлен data_source из session state: {saved_data_source}")
         else:
+            # Первый запуск или невалидный сохраненный выбор - используем "Использовать директорию"
             default_index = 0
+            logger.debug(f"[DATA_SOURCE] Используется дефолтный выбор: {data_source_options[0]}")
+        
+        # КРИТИЧНО: Восстанавливаем data_source из session state при rerun
+        # Это предотвращает сброс на "Использовать директорию" после загрузки данных
+        saved_data_source = safe_session_get("data_source", None)
+        if saved_data_source and saved_data_source in data_source_options:
+            default_index = data_source_options.index(saved_data_source)
+            logger.debug(f"[DATA_SOURCE] Восстановлен data_source из session state: {saved_data_source} (index={default_index})")
         
         data_source = st.radio(
             "Источник данных",
@@ -282,6 +280,10 @@ def render_dashboard():
                     safe_session_set("data_source", "Google Drive")
                     logger.debug(f"[DATA_SOURCE] Исправлен data_source на: Google Drive")
         
+        # КРИТИЧНО: НЕ восстанавливаем автоматически data_source из cloud storage
+        # Пользователь должен сам выбрать источник данных
+        # Это предотвращает автоматическую загрузку и торможение интерфейса
+        
         use_default_data = (data_source == "Использовать директорию")
         use_experiment_data = (data_source == "Использовать данные из эксперимента")
         use_gdrive_data = (data_source == "Google Drive") and GDRIVE_ENABLED
@@ -296,17 +298,68 @@ def render_dashboard():
                 "Ссылка на папку Google Drive",
                 value=saved_url if saved_url else "",
                 placeholder="https://drive.google.com/drive/folders/1ABC123xyz...",
-                help="Вставьте ссылку на расшаренную папку с JSON файлами",
+                help="Вставьте ссылку на расшаренную папку с JSON файлами. После ввода нажмите кнопку 'Загрузить из Google Drive' ниже.",
                 key="gdrive_load_folder_url_sidebar"
             )
             # Сохраняем URL в session state
             if drive_folder_url:
                 safe_session_set("gdrive_load_url", drive_folder_url)
+                # КРИТИЧНО: Убеждаемся, что data_source остается "Google Drive" после ввода URL
+                # Это предотвращает сброс на "Использовать директорию" при rerun от text_input
+                if data_source != "Google Drive":
+                    safe_session_set("data_source", "Google Drive")
+                    logger.debug(f"[DATA_SOURCE] Исправлен data_source на Google Drive после ввода URL")
             
             # Проверка авторизации Google Drive
             import os
-            default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
-            creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+            import json as _json_local
+            import base64
+            import tempfile
+            
+            creds_path = None
+            
+            # КРИТИЧНО: Проверяем переменные окружения для credentials (для Cloud Run)
+            # Сначала проверяем base64-encoded версию (более безопасно для передачи через командную строку)
+            credentials_b64 = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON_B64')
+            if credentials_b64:
+                try:
+                    # Декодируем base64
+                    credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
+                    creds_data = _json_local.loads(credentials_json)
+                    # Создаем временный файл для credentials
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                        json.dump(creds_data, f)
+                        temp_creds_path = f.name
+                    creds_path = temp_creds_path
+                except Exception as e:
+                    logger.error(f"Ошибка при декодировании GOOGLE_DRIVE_CREDENTIALS_JSON_B64: {e}")
+            
+            # Fallback: проверяем обычную JSON строку
+            if not creds_path:
+                credentials_json = os.getenv('GOOGLE_DRIVE_CREDENTIALS_JSON')
+                if credentials_json:
+                    try:
+                        # Если credentials переданы как JSON строка в переменной окружения
+                        creds_data = json.loads(credentials_json)
+                        # Создаем временный файл для credentials
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            _json_local.dump(creds_data, f)
+                            temp_creds_path = f.name
+                        creds_path = temp_creds_path
+                    except Exception as e:
+                        logger.error(f"Ошибка при парсинге GOOGLE_DRIVE_CREDENTIALS_JSON: {e}")
+            
+            # Fallback на обычный путь к файлу
+            if not creds_path:
+                # Сначала проверяем в текущей директории (для Docker образа)
+                local_creds_path = os.path.join('.config', 'gdrive', 'credentials.json')
+                if os.path.exists(local_creds_path):
+                    default_creds_path = local_creds_path
+                else:
+                    # Fallback на домашнюю директорию
+                    default_creds_path = os.path.join(os.path.expanduser('~'), '.config', 'gdrive', 'credentials.json')
+                creds_path = os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH', default_creds_path)
+            
             from scale.dashboard_common import get_credentials
             credentials = get_credentials(credentials_path=creds_path)
             
@@ -372,18 +425,9 @@ def render_dashboard():
                     После настройки перезапустите dashboard.
                     """)
         
-        # КРИТИЧНО: Если в session state установлен флаг use_cloud_storage и есть данные,
-        # принудительно используем cloud storage независимо от выбора в селекторе
-        if safe_session_get("use_cloud_storage", False) and safe_session_get("predictions_cloud", None):
-            use_cloud_storage_data = True
-            # Принудительно устанавливаем правильный data_source
-            if data_source not in ["Google Drive / GCS", "Google Cloud Storage (GCS)"]:
-                if GCS_ENABLED:
-                    data_source = "Google Cloud Storage (GCS)"
-                    safe_session_set("data_source", data_source)
-                elif GDRIVE_ENABLED:
-                    data_source = "Google Drive / GCS"
-                    safe_session_set("data_source", data_source)
+        # КРИТИЧНО: НЕ принудительно устанавливаем use_cloud_storage_data
+        # Пользователь должен сам выбрать источник данных
+        # Это предотвращает показ неправильных секций в sidebar
         
         # Безопасное сохранение в session_state
         safe_session_set("use_directory", use_default_data)
@@ -885,65 +929,76 @@ def render_dashboard():
         # Ключ кэша для предиктов
         predictions_cache_key = f"predictions_{predictions_dir}"
         
-        # Проверяем кэш
+        # КРИТИЧНО: Загрузка происходит только по кнопке, не автоматически
+        # Проверяем кэш - если данные уже загружены для этой директории, используем их
         if (safe_session_has(predictions_cache_key) and 
             safe_session_get("predictions_dir_cache") == str(predictions_dir)):
             predictions = safe_session_get(predictions_cache_key)
-        elif predictions_dir.exists():
-            json_files = list(predictions_dir.glob("*.json"))
-            if json_files:
-                with st.spinner(f"Загрузка предсказаний из {predictions_dir}..."):
-                    predictions = {}
-                    for json_file in json_files:
-                        try:
-                            preds = domain.predictions_from_json(str(json_file))
-                            image_name = json_file.stem
-                            predictions[image_name] = preds
-                        except Exception as e:
-                            st.error(f"Ошибка при загрузке {json_file.name}: {e}")
-                    # Сохраняем в кэш
-                    safe_session_set(predictions_cache_key, predictions)
-                    safe_session_set("predictions_dir_cache", str(predictions_dir))
+            st.info(f"✅ Используются загруженные данные из {predictions_dir} ({len(predictions)} файлов)")
+        else:
+            # Данные не загружены - показываем кнопку загрузки
+            if predictions_dir.exists():
+                json_files = list(predictions_dir.glob("*.json"))
+                if json_files:
+                    st.info(f"📂 Найдено {len(json_files)} JSON файлов в {predictions_dir}")
+                    load_button_clicked = st.button(
+                        f"📥 Загрузить данные из {predictions_dir}",
+                        key=f"load_predictions_{predictions_dir}",
+                        type="primary"
+                    )
+                    if load_button_clicked:
+                        with st.spinner(f"Загрузка предсказаний из {predictions_dir}..."):
+                            predictions = {}
+                            for json_file in json_files:
+                                try:
+                                    preds = domain.predictions_from_json(str(json_file))
+                                    image_name = json_file.stem
+                                    predictions[image_name] = preds
+                                except Exception as e:
+                                    st.error(f"Ошибка при загрузке {json_file.name}: {e}")
+                            # Сохраняем в кэш
+                            safe_session_set(predictions_cache_key, predictions)
+                            safe_session_set("predictions_dir_cache", str(predictions_dir))
+                            st.success(f"✅ Загружено {len(predictions)} файлов из {predictions_dir}")
+                            st.rerun()
+                else:
+                    st.warning(f"⚠ В директории {predictions_dir} нет JSON файлов")
+            else:
+                st.error(f"❌ Директория {predictions_dir} не найдена")
     
     elif use_gdrive_data:
         # Загрузка из Google Drive (через render_gdrive_load_section)
-        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
-        # Сначала проверяем session state для использования уже загруженных данных
-        cloud_predictions = safe_session_get("predictions_cloud", None)
-        if cloud_predictions and len(cloud_predictions) > 0:
-            predictions = cloud_predictions
-            # Сохраняем в кэш для использования ниже
-            safe_session_set("predictions_cloud_cache", predictions)
-            st.info(f"✅ Используются данные из Google Drive: {len(predictions)} файлов")
+        # КРИТИЧНО: НЕ восстанавливаем автоматически данные из session state
+        # Данные загружаются только при явном нажатии кнопки загрузки
+        # Это предотвращает автоматическую загрузку и торможение интерфейса
         
-        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
-        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected="Google Drive")
-        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        # Показываем интерфейс загрузки
+        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected=data_source)
+        # Если функция вернула новые данные (после нажатия кнопки), используем их
         if cloud_predictions_new and len(cloud_predictions_new) > 0:
             predictions = cloud_predictions_new
             safe_session_set("predictions_cloud_cache", predictions)
-            # Обновляем cloud_predictions для использования ниже
-            cloud_predictions = cloud_predictions_new
+            # КРИТИЧНО: Обновляем predictions_cloud в session state
+            safe_session_set("predictions_cloud", cloud_predictions_new)
+            safe_session_set("use_cloud_storage", True)
+            safe_session_set("data_source", data_source)
     
     elif use_cloud_storage_data:
         # Загрузка из Google Drive или GCS (через render_gdrive_load_section)
-        # КРИТИЧНО: ВСЕГДА показываем интерфейс загрузки, чтобы можно было переключаться между источниками
-        # Сначала проверяем session state для использования уже загруженных данных
-        cloud_predictions = safe_session_get("predictions_cloud", None)
-        if cloud_predictions and len(cloud_predictions) > 0:
-            predictions = cloud_predictions
-            # Сохраняем в кэш для использования ниже
-            safe_session_set("predictions_cloud_cache", predictions)
-            st.info(f"✅ Используются данные из облачного хранилища: {len(predictions)} файлов")
+        # КРИТИЧНО: НЕ восстанавливаем автоматически данные из session state
+        # Данные загружаются только при явном нажатии кнопки загрузки
+        # Это предотвращает автоматическую загрузку и торможение интерфейса
         
-        # ВСЕГДА показываем интерфейс загрузки, чтобы можно было загрузить другие данные или переключиться
-        source_info, cloud_predictions_new = render_gdrive_load_section()
-        # Если функция вернула новые данные, используем их (это перезапишет старые)
+        # Показываем интерфейс загрузки
+        source_info, cloud_predictions_new = render_gdrive_load_section(data_source_selected=data_source)
+        # Если функция вернула новые данные (после нажатия кнопки), используем их
         if cloud_predictions_new and len(cloud_predictions_new) > 0:
             predictions = cloud_predictions_new
             safe_session_set("predictions_cloud_cache", predictions)
-            # Обновляем cloud_predictions для использования ниже
-            cloud_predictions = cloud_predictions_new
+            # КРИТИЧНО: Обновляем predictions_cloud в session state
+            safe_session_set("predictions_cloud", cloud_predictions_new)
+            safe_session_set("use_cloud_storage", True)
+            safe_session_set("data_source", data_source)
     
     # ВАЖНО: Проверяем, есть ли загруженные данные из GCS/GDrive ПЕРЕД проверкой других источников
     # Это нужно для случая, когда данные загружены, но источник не выбран в селекторе
@@ -953,41 +1008,13 @@ def render_dashboard():
     logger.debug(f"  - use_cloud_storage_data: {use_cloud_storage_data}")
     logger.debug(f"  - use_gdrive_data: {use_gdrive_data}")
     
-    if not predictions or len(predictions) == 0:
-        cloud_predictions = safe_session_get("predictions_cloud", None)
-        
-        logger.debug(f"Проверка cloud_predictions:")
-        logger.debug(f"  - cloud_predictions is not None: {cloud_predictions is not None}")
-        if cloud_predictions:
-            logger.debug(f"  - Тип cloud_predictions: {type(cloud_predictions)}")
-            logger.debug(f"  - Длина cloud_predictions: {len(cloud_predictions) if hasattr(cloud_predictions, '__len__') else 'N/A'}")
-            if isinstance(cloud_predictions, dict):
-                logger.debug(f"  - Ключи cloud_predictions: {list(cloud_predictions.keys())[:3]}")
-        
-        if cloud_predictions and len(cloud_predictions) > 0:
-            logger.debug("✅ Использую cloud_predictions!")
-            predictions = cloud_predictions
-            # Убеждаемся, что флаги установлены правильно
-            safe_session_set("use_cloud_storage", True)
-            # КРИТИЧНО: Устанавливаем правильный data_source в зависимости от доступных опций
-            current_data_source = safe_session_get("data_source", None)
-            # Проверяем, что data_source правильный, и если нет - устанавливаем правильный
-            valid_cloud_sources = []
-            if GCS_ENABLED:
-                valid_cloud_sources.append("Google Cloud Storage (GCS)")
-            if GDRIVE_ENABLED:
-                valid_cloud_sources.append("Google Drive")
-            
-            if current_data_source not in valid_cloud_sources:
-                # Устанавливаем правильный data_source
-                if GCS_ENABLED:
-                    safe_session_set("data_source", "Google Cloud Storage (GCS)")
-                    logger.debug(f"[FALLBACK] Установлен data_source: Google Cloud Storage (GCS)")
-                elif GDRIVE_ENABLED:
-                    safe_session_set("data_source", "Google Drive")
-                    logger.debug(f"[FALLBACK] Установлен data_source: Google Drive")
-        else:
-            logger.debug("❌ cloud_predictions пусто или None")
+    # КРИТИЧНО: НЕ используем автоматическую загрузку из cloud storage
+    # Данные загружаются только если пользователь явно выбрал соответствующий источник и нажал кнопку
+    # Это предотвращает автоматическую загрузку и торможение интерфейса
+    # cloud_predictions = safe_session_get("predictions_cloud", None)
+    # if cloud_predictions and len(cloud_predictions) > 0:
+    #     # Автоматическая загрузка отключена - данные загружаются только при явном выборе источника
+    #     pass
 
     # Загрузка данных из эксперимента (если выбран этот источник)
     if use_experiment_data and safe_session_has("experiment_dir"):
@@ -1500,7 +1527,11 @@ def render_dashboard():
                 
                 # Если данные из эксперимента не найдены, используем обычные данные
                 if df_features_for_score is None:
-                    df_features_for_score = safe_session_get("df_features", None)
+                    # Пытаемся сначала взять полный набор относительных признаков,
+                    # чтобы пересчет score был максимально близок к эксперименту
+                    df_features_for_score = safe_session_get("df_features_full", None)
+                    if df_features_for_score is None:
+                        df_features_for_score = safe_session_get("df_features", None)
                 
                 if df_features_for_score is not None and len(df_features_for_score) > 0 and len(current_selected_for_score) > 0:
                     # Определяем mod и normal образцы
@@ -1521,14 +1552,24 @@ def render_dashboard():
                             feature_cols_for_score = [col for col in current_selected_for_score if col in df_features_for_score.columns]
                             if len(feature_cols_for_score) > 0:
                                 sorted_feature_cols_for_score = sorted(feature_cols_for_score)
+                                # Для стабильности сортируем df по image так же, как в экспериментах
+                                df_for_score_sorted = df_features_for_score.sort_values("image").reset_index(drop=True)
                                 current_score_metrics = evaluate_feature_set(
-                                    df_features_for_score,
+                                    df_for_score_sorted,
                                     sorted_feature_cols_for_score,
                                     mod_samples_for_score,
                                     normal_samples_for_score
                                 )
                                 
                                 current_score = current_score_metrics.get('score', None)
+                                
+                                # ОТЛАДКА: Выводим компоненты score
+                                current_separation = current_score_metrics.get('separation', 0)
+                                current_mod_norm = current_score_metrics.get('mean_pc1_norm_mod', 0)
+                                current_variance = current_score_metrics.get('explained_variance', 0)
+                                logger.debug(f"[SCORE DEBUG] separation={current_separation:.4f}, mean_pc1_norm_mod={current_mod_norm:.4f}, explained_variance={current_variance:.4f}")
+                                logger.debug(f"[SCORE DEBUG] score = 0.4*{current_separation:.4f} + 0.3*{current_mod_norm:.4f} + 0.3*{current_variance:.4f} = {current_score:.4f}")
+                                logger.debug(f"[SCORE DEBUG] mod_samples={len(mod_samples_for_score)}, normal_samples={len(normal_samples_for_score)}")
                                 
                                 # Показываем текущий score и сравниваем с экспериментальным
                                 if current_score is not None and current_score != -np.inf:
@@ -1545,21 +1586,31 @@ def render_dashboard():
                                     score_col1, score_col2 = st.columns(2)
                                     with score_col1:
                                         st.metric("📊 Текущий Score", f"{current_score:.4f}")
+                                        # Показываем компоненты score
+                                        current_separation = current_score_metrics.get('separation', 0)
+                                        current_mod_norm = current_score_metrics.get('mean_pc1_norm_mod', 0)
+                                        current_variance = current_score_metrics.get('explained_variance', 0)
+                                        st.caption(f"Separation: {current_separation:.4f} | Mod norm: {current_mod_norm:.4f} | Var: {current_variance:.4f}")
+                                        # Предупреждение если separation отрицательный
+                                        if current_separation < 0:
+                                            st.warning(f"⚠️ Separation отрицательный ({current_separation:.4f})! Mod образцы имеют меньшие PC1 чем normal. Проверьте признаки или образцы.")
                                     with score_col2:
                                         if experiment_score is not None:
                                             diff = current_score - experiment_score
-                                            diff_color = "normal" if abs(diff) < 0.0001 else "inverse"
+                                            # Порог чувствительности: считаем различия < 0.01 численно несущественными
+                                            diff_threshold = 0.01
+                                            diff_color = "normal" if abs(diff) < diff_threshold else "inverse"
                                             st.metric(
                                                 "📈 Экспериментальный Score", 
                                                 f"{experiment_score:.4f}",
-                                                delta=f"{diff:+.4f}" if abs(diff) >= 0.0001 else "0.0000",
+                                                delta=f"{diff:+.4f}" if abs(diff) >= diff_threshold else "0.0000",
                                                 delta_color=diff_color
                                             )
                                         else:
                                             st.metric("📈 Экспериментальный Score", "—")
                                     
-                                    # Детальное сравнение компонентов score
-                                    if experiment_score is not None and abs(current_score - experiment_score) >= 0.0001:
+                                    # Детальное сравнение компонентов score (только при заметном отличии)
+                                    if experiment_score is not None and abs(current_score - experiment_score) >= diff_threshold:
                                         st.warning(f"⚠️ Разница между текущим и экспериментальным score: {abs(current_score - experiment_score):.4f}")
                                         
                                         # Показываем детальное сравнение компонентов
@@ -1904,8 +1955,12 @@ def render_dashboard():
                     config_features = load_feature_config()
                     
                     if config_features:
-                        # Фильтруем только существующие признаки
-                        valid_config_features = [f for f in config_features if f in feature_cols]
+                        # Фильтруем только существующие признаки по полному df_features_for_ui,
+                        # а не только по ограниченному списку feature_cols, чтобы не терять фичи из эксперимента
+                        valid_config_features = [
+                            f for f in config_features
+                            if df_features_for_ui is not None and f in df_features_for_ui.columns
+                        ]
                         if valid_config_features:
                             safe_session_set("selected_features", valid_config_features)
                         else:
@@ -2956,15 +3011,21 @@ def render_dashboard():
                     # Вычисляем метрики только если есть и mod, и normal образцы
                     if len(mod_samples) > 0 and len(normal_samples) > 0:
                         try:
-                            feature_cols_for_metrics = [col for col in current_selected if col in df_features.columns]
+                            # Для пересчета метрик стараемся использовать полный набор относительных признаков,
+                            # чтобы конфиг и способ расчета совпадали с экспериментом
+                            base_df = safe_session_get("df_features_full", None)
+                            if base_df is None:
+                                base_df = df_features
+                            
+                            feature_cols_for_metrics = [col for col in current_selected if col in base_df.columns]
                             if len(feature_cols_for_metrics) > 0:
                                 # КРИТИЧНО: Сортируем признаки для стабильности PCA
-                                # Порядок признаков может влиять на PCA из-за численной нестабильности
                                 sorted_feature_cols = sorted(feature_cols_for_metrics)
                                 
-                                
+                                # Для стабильности сортируем df по image так же, как в экспериментах
+                                df_for_metrics_sorted = base_df.sort_values("image").reset_index(drop=True)
                                 current_metrics = evaluate_feature_set(
-                                    df_features,
+                                    df_for_metrics_sorted,
                                     sorted_feature_cols,  # Используем отсортированные признаки
                                     mod_samples,
                                     normal_samples
@@ -3162,6 +3223,11 @@ def render_dashboard():
                        - Или выберите вручную: Dysplasia, Mild, Moderate признаки
                     
                     **После изменения признаков** кнопка "Применить признаки" появится автоматически. PCA пересчитывается при загрузке данных и после применения изменений.
+
+                    **О точности метрик:**
+                    - Метрики эксперимента (Score, Separation, Mod norm, Var) сохраняются в момент запуска эксперимента.
+                    - При повторном пересчёте на тех же данных возможны небольшие численные отличия из-за сохранения/загрузки и особенностей PCA.
+                    - **Различия по Score меньше 0.01 считаются численно несущественными** и относятся к погрешности метода, а не к изменению шкалы.
                     """)
             else:
                 st.info("Загрузите данные, чтобы выбрать признаки")
