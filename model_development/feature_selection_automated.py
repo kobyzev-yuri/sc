@@ -878,8 +878,8 @@ def run_feature_selection_analysis(
         print("   Режим: ИСПОЛЬЗУЕМ ВСЕ относительные признаки (без ручного списка классов)")
     else:
         # Старый подход: фиксированный список признаков по классам
-        df_all = aggregate.select_all_feature_columns(df_features)
-        candidate_features = [c for c in df_all.columns if c != 'image']
+    df_all = aggregate.select_all_feature_columns(df_features)
+    candidate_features = [c for c in df_all.columns if c != 'image']
         print(f"   Кандидатных признаков (фиксированный список классов): {len(candidate_features)}")
     
     # Создание селектора

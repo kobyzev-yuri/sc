@@ -1254,7 +1254,14 @@ def render_dashboard():
     df_all_features = None
     
     # Проверяем, есть ли данные в кэше
-    data_already_loaded = safe_session_has("df") and safe_session_get("df") is not None
+    # ВАЖНО:
+    # - Для эксперимента кешированные df можно переиспользовать между перерисовками.
+    # - Для локальной директории всегда пересобираем df из текущих predictions (но с кешем df_cache_key внутри),
+    #   чтобы переключение источника данных (эксперимент → директория) не застревало на старых df.
+    if use_experiment_data:
+        data_already_loaded = safe_session_has("df") and safe_session_get("df") is not None
+    else:
+        data_already_loaded = False
     
     if data_already_loaded:
         df = safe_session_get("df", None)
@@ -1530,8 +1537,8 @@ def render_dashboard():
                     # Пытаемся сначала взять полный набор относительных признаков,
                     # чтобы пересчет score был максимально близок к эксперименту
                     df_features_for_score = safe_session_get("df_features_full", None)
-                    if df_features_for_score is None:
-                        df_features_for_score = safe_session_get("df_features", None)
+                if df_features_for_score is None:
+                    df_features_for_score = safe_session_get("df_features", None)
                 
                 if df_features_for_score is not None and len(df_features_for_score) > 0 and len(current_selected_for_score) > 0:
                     # Определяем mod и normal образцы
