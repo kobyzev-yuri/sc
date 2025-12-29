@@ -36,16 +36,52 @@ from scale import aggregate, pca_scoring
 from model_development import feature_selection_export
 
 
+# Кэш для ручных меток (загружается один раз)
+_manual_labels_cache = None
+
+def _load_manual_labels() -> Dict[str, str]:
+    """Загружает ручные метки из конфигурационного файла."""
+    global _manual_labels_cache
+    if _manual_labels_cache is not None:
+        return _manual_labels_cache
+    
+    _manual_labels_cache = {}
+    manual_labels_file = Path(__file__).parent.parent / "scale" / "cfg" / "manual_sample_labels.json"
+    
+    if manual_labels_file.exists():
+        try:
+            with open(manual_labels_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                _manual_labels_cache = config.get("manual_labels", {})
+        except Exception as e:
+            print(f"Предупреждение: не удалось загрузить ручные метки из {manual_labels_file}: {e}")
+            _manual_labels_cache = {}
+    
+    return _manual_labels_cache
+
+
 def identify_sample_type(image_name: str) -> str:
     """
     Определяет тип образца по имени файла.
     
+    Сначала проверяет ручные метки из конфигурационного файла,
+    затем применяет автоматическую классификацию по имени файла.
+    
     Args:
-        image_name: Имя файла/образца
+        image_name: Имя файла/образца (может быть с расширением .json или без)
         
     Returns:
-        'mod' для патологических образцов, 'normal' для нормальных
+        'mod' для патологических образцов, 'normal' для нормальных, 'unknown' для неопределенных
     """
+    # Убираем расширение .json если есть
+    image_name_clean = image_name.replace('.json', '')
+    
+    # Проверяем ручные метки
+    manual_labels = _load_manual_labels()
+    if image_name_clean in manual_labels:
+        return manual_labels[image_name_clean]
+    
+    # Автоматическая классификация по имени файла
     image_name_lower = image_name.lower()
     if 'mod' in image_name_lower or 'ibd' in image_name_lower:
         return 'mod'
@@ -878,8 +914,8 @@ def run_feature_selection_analysis(
         print("   Режим: ИСПОЛЬЗУЕМ ВСЕ относительные признаки (без ручного списка классов)")
     else:
         # Старый подход: фиксированный список признаков по классам
-    df_all = aggregate.select_all_feature_columns(df_features)
-    candidate_features = [c for c in df_all.columns if c != 'image']
+        df_all = aggregate.select_all_feature_columns(df_features)
+        candidate_features = [c for c in df_all.columns if c != "image"]
         print(f"   Кандидатных признаков (фиксированный список классов): {len(candidate_features)}")
     
     # Создание селектора
