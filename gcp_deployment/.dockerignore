@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+README*
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Archives
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+
+# Large image files (WSI)
+*.tiff
+*.tif
+*.TIFF
+*.TIF
+*.svs
+*.ndpi
+wsi/
+
+# Development directories
+notebook/
+archive/
+gcp_deployment/
+# model_development/ - НЕ исключаем, нужен для dashboard!
+
+# Large data files
+data/
+*.h5
+*.hdf5
+
+# Results directories - копируем только inference файлы (2 файла)
+# predictions и visualization не копируем
+results/predictions/
+results/visualization/
