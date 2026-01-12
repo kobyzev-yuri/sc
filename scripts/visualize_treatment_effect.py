@@ -422,6 +422,54 @@ def create_treatment_comparison_plot(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\n💾 Картинка сохранена: {output_path}")
     
+    # Создаем визуализацию PCA loadings (как в dashboard)
+    if analyzer and analyzer.pca is not None and analyzer.feature_columns:
+        try:
+            # Получаем feature importance (loadings) из analyzer
+            feature_importance = analyzer.get_feature_importance()
+            
+            # Создаем график loadings (как в dashboard)
+            n_features = len(feature_importance)
+            fig_height = max(6, n_features * 0.4)  # Минимум 6, плюс 0.4 на каждый признак
+            fig_loadings, ax_loadings = plt.subplots(figsize=(10, fig_height))
+            
+            # Сортируем по абсолютному значению для графика
+            features_sorted = feature_importance.sort_values(key=abs, ascending=True)
+            
+            # Цвета: красный для отрицательных, синий для положительных (как в dashboard)
+            colors_loadings = ['red' if x < 0 else 'blue' for x in features_sorted.values]
+            ax_loadings.barh(
+                range(len(features_sorted)),
+                features_sorted.values,
+                align="center",
+                color=colors_loadings,
+                alpha=0.7
+            )
+            ax_loadings.set_yticks(range(len(features_sorted)))
+            ax_loadings.set_yticklabels(features_sorted.index, fontsize=9)
+            ax_loadings.set_xlabel("Loading value", fontsize=12, fontweight='bold')
+            ax_loadings.set_title(f"Важность признаков в PC1 (PCA Loadings)\n{n_features} признаков из лучшего эксперимента", 
+                               fontsize=14, fontweight='bold', pad=20)
+            ax_loadings.axvline(x=0, color='black', linestyle='--', linewidth=0.8)
+            ax_loadings.grid(True, alpha=0.3, axis="x")
+            
+            # Добавляем легенду
+            blue_patch = mpatches.Patch(color='blue', label='Положительный loading (увеличение → воспаление)')
+            red_patch = mpatches.Patch(color='red', label='Отрицательный loading (увеличение → норма)')
+            ax_loadings.legend(handles=[blue_patch, red_patch], loc='lower right', fontsize=10)
+            
+            plt.tight_layout()
+            
+            # Сохраняем график loadings
+            loadings_output_path = output_path.replace('.png', '_pca_loadings.png')
+            plt.savefig(loadings_output_path, dpi=300, bbox_inches='tight')
+            print(f"💾 Картинка PCA loadings сохранена: {loadings_output_path}")
+            plt.close(fig_loadings)
+        except Exception as e:
+            print(f"⚠️  Не удалось создать визуализацию PCA loadings: {e}")
+            import traceback
+            traceback.print_exc()
+    
     # Создаем дополнительную версию с топ-10 для презентации
     if len(top_features) > 10:
         top_10_features = top_features.head(10)
