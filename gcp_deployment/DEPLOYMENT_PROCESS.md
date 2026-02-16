@@ -132,3 +132,10 @@ ssh ai8049520@136.116.116.95 "cd ~ && tar -xzf deployment_full.tar.gz && cd depl
 
 
 
+
+
+
+
+
+
+
